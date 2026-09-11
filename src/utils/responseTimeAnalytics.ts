@@ -180,34 +180,42 @@ export function computeResponseTimeAnalytics(
   const activePatientsCount = patientMetrics.filter(p => !p.completed).length;
   const completedPatientsCount = patientMetrics.filter(p => p.completed).length;
 
-  // Calculate Averages - Respon Time (Daftar -> Ceklis)
-  const allResponseMinutes = patientMetrics.map(p => p.responseTimeMinutes);
-  const avgResponseMinutes = allResponseMinutes.length > 0 
-    ? Math.round(allResponseMinutes.reduce((a, b) => a + b, 0) / allResponseMinutes.length) 
+  // Respon Time (Daftar/Input -> Diceklis) hanya boleh dihitung dari pasien yang
+  // SUDAH diceklis selesai. Pasien yang masih aktif/berjalan belum punya waktu
+  // respon final - responseTimeMinutes mereka cuma jam berjalan (elapsed sejak
+  // input), bukan durasi input->ceklis yang sesungguhnya. Kalau dicampur ke
+  // rata-rata/distribusi/kepatuhan SPM, angkanya jadi bias dan berubah-ubah
+  // hanya karena waktu terus berjalan, padahal pasien itu belum selesai dilayani.
+  const completedMetrics = patientMetrics.filter(p => p.completed);
+
+  const allResponseMinutes = completedMetrics.map(p => p.responseTimeMinutes);
+  const avgResponseMinutes = allResponseMinutes.length > 0
+    ? Math.round(allResponseMinutes.reduce((a, b) => a + b, 0) / allResponseMinutes.length)
     : 0;
 
   const avgWaitMinutes = avgResponseMinutes;
   const avgTotalMinutes = avgResponseMinutes;
 
-  // Distribution
+  // Distribution - hanya dari pasien yang sudah diceklis selesai
   let fastCount = 0;
   let normalCount = 0;
   let moderateCount = 0;
   let delayedCount = 0;
 
-  patientMetrics.forEach(p => {
+  completedMetrics.forEach(p => {
     if (p.responseTimeMinutes <= 15) fastCount++;
     else if (p.responseTimeMinutes <= 30) normalCount++;
     else if (p.responseTimeMinutes <= 60) moderateCount++;
     else delayedCount++;
   });
 
+  const respondedCount = completedMetrics.length;
   const spmCompliantCount = fastCount + normalCount; // <= 30 min
-  const spmComplianceRate = totalPatients > 0 ? Math.round((spmCompliantCount / totalPatients) * 100) : 100;
-  const fastRate = totalPatients > 0 ? Math.round((fastCount / totalPatients) * 100) : 0;
-  const normalRate = totalPatients > 0 ? Math.round((normalCount / totalPatients) * 100) : 0;
-  const moderateRate = totalPatients > 0 ? Math.round((moderateCount / totalPatients) * 100) : 0;
-  const delayedRate = totalPatients > 0 ? Math.round((delayedCount / totalPatients) * 100) : 0;
+  const spmComplianceRate = respondedCount > 0 ? Math.round((spmCompliantCount / respondedCount) * 100) : 100;
+  const fastRate = respondedCount > 0 ? Math.round((fastCount / respondedCount) * 100) : 0;
+  const normalRate = respondedCount > 0 ? Math.round((normalCount / respondedCount) * 100) : 0;
+  const moderateRate = respondedCount > 0 ? Math.round((moderateCount / respondedCount) * 100) : 0;
+  const delayedRate = respondedCount > 0 ? Math.round((delayedCount / respondedCount) * 100) : 0;
 
   // Longest Waiting Active Patients (Top 6)
   const longestWaitingActive = patientMetrics
@@ -227,18 +235,21 @@ export function computeResponseTimeAnalytics(
       const activeBox = boxPatients.filter(p => !p.completed).length;
       const completedBox = boxPatients.filter(p => p.completed).length;
 
-      const bRespList = boxPatients.map(p => p.responseTimeMinutes);
+      // Respon time per terapis: hanya dari pasien yang sudah diceklis selesai
+      // di kotak ini, sama seperti agregat keseluruhan di atas.
+      const boxCompletedMetrics = boxPatients.filter(p => p.completed);
+      const bRespList = boxCompletedMetrics.map(p => p.responseTimeMinutes);
       const bAvgResp = bRespList.length > 0 ? Math.round(bRespList.reduce((a, b) => a + b, 0) / bRespList.length) : 0;
 
-      const bCompliant = boxPatients.filter(p => p.responseTimeMinutes <= 30).length;
-      const bComplianceRate = totalBox > 0 ? Math.round((bCompliant / totalBox) * 100) : 100;
+      const bCompliant = boxCompletedMetrics.filter(p => p.responseTimeMinutes <= 30).length;
+      const bComplianceRate = boxCompletedMetrics.length > 0 ? Math.round((bCompliant / boxCompletedMetrics.length) * 100) : 100;
 
       const activeBoxPatients = boxPatients.filter(p => !p.completed);
-      const longestActiveWaitMinutes = activeBoxPatients.length > 0 
-        ? Math.max(...activeBoxPatients.map(p => p.responseTimeMinutes)) 
+      const longestActiveWaitMinutes = activeBoxPatients.length > 0
+        ? Math.max(...activeBoxPatients.map(p => p.responseTimeMinutes))
         : 0;
 
-      const delayedCountBox = boxPatients.filter(p => p.responseTimeMinutes > 45).length;
+      const delayedCountBox = boxCompletedMetrics.filter(p => p.responseTimeMinutes > 45).length;
 
       const cleanOfficer = (box.officerName && !box.officerName.toLowerCase().startsWith('terapis irm'))
         ? box.officerName
