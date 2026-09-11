@@ -1508,6 +1508,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       isExplicitReset: true,
       resetConfirmed: true,
       lastResetAt: resetTime,
+      boxOrderUpdatedAt: incomingPayload.boxOrderUpdatedAt || existingState.boxOrderUpdatedAt || null,
       lastUpdated: new Date().toISOString(),
     };
   }
@@ -1618,8 +1619,25 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   const mergedBoxes: any[] = [];
   const seenIds = new Set<string>();
 
-  if (incomingBoxes.length > 0) {
-    // 1. Maintain incomingBoxes explicit order as determined by user drag-and-drop or reorder actions
+  // Almost every /api/queue POST carries the sender's ENTIRE `boxes` array,
+  // even ones triggered by something unrelated to reordering (calling a
+  // patient, ticking a checkbox, etc). If a device had the queue open since
+  // before someone else's drag-and-drop reorder, its next unrelated save
+  // resends its own stale (pre-reorder) box array - and used to silently
+  // win because whichever POST arrived last dictated the whole array's
+  // position, with no way to tell "fresh reorder" from "stale resend" apart.
+  // boxOrderUpdatedAt is a watermark stamped ONLY by actual reorder actions
+  // (drag, move-step, "Atur Piket" reorder) - only a payload whose watermark
+  // is strictly newer than what's already stored is treated as a real
+  // reorder; anything else keeps the server's existing box order and just
+  // merges per-box content (title, instruction, photos, etc.) by id.
+  const existingOrderWatermark = existingState.boxOrderUpdatedAt ? new Date(existingState.boxOrderUpdatedAt).getTime() : 0;
+  const incomingOrderWatermark = incomingPayload.boxOrderUpdatedAt ? new Date(incomingPayload.boxOrderUpdatedAt).getTime() : 0;
+  const isExplicitReorder = incomingBoxes.length > 0 && incomingOrderWatermark > 0 && incomingOrderWatermark > existingOrderWatermark;
+  const effectiveBoxOrderUpdatedAt = isExplicitReorder ? incomingPayload.boxOrderUpdatedAt : (existingState.boxOrderUpdatedAt || null);
+
+  if (isExplicitReorder) {
+    // 1. Adopt incomingBoxes' explicit order as determined by this fresh drag-and-drop / reorder action
     for (let idx = 0; idx < incomingBoxes.length; idx++) {
       const inB = incomingBoxes[idx];
       if (!inB || !inB.id || deletedBoxIds.has(inB.id) || seenIds.has(inB.id)) continue;
@@ -1657,6 +1675,58 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
         mergedBoxes.push(sanitizeServerBox({
           ...b,
           order: typeof b.order === 'number' ? b.order : mergedBoxes.length
+        }));
+      }
+    }
+  } else if (incomingBoxes.length > 0) {
+    // Not a fresher reorder: keep the server's current order, only merge
+    // per-box content from whichever incoming box matches by id, and append
+    // genuinely new incoming boxes (e.g. "Tambah Kotak") that don't exist yet.
+    const incomingBoxMap = new Map<string, any>();
+    for (const inB of incomingBoxes) {
+      if (inB && inB.id && !deletedBoxIds.has(inB.id)) {
+        incomingBoxMap.set(inB.id, inB);
+      }
+    }
+
+    const sortedExisting = existingBoxes
+      .filter(b => b && b.id && !deletedBoxIds.has(b.id))
+      .slice()
+      .sort((a, b) => (typeof a?.order === 'number' ? a.order : 9999) - (typeof b?.order === 'number' ? b.order : 9999));
+
+    for (const b of sortedExisting) {
+      seenIds.add(b.id);
+      const inB = incomingBoxMap.get(b.id);
+      if (inB) {
+        let finalImageUrls = inB.instructionImageUrls;
+        if (finalImageUrls === undefined && b.instructionImageUrls) {
+          finalImageUrls = b.instructionImageUrls;
+        }
+        mergedBoxes.push(sanitizeServerBox({
+          ...b,
+          ...inB,
+          instructionImageUrls: finalImageUrls,
+          instructionImageUrl: (Array.isArray(finalImageUrls) && finalImageUrls.length > 0)
+            ? finalImageUrls[0]
+            : (inB.instructionImageUrl || b.instructionImageUrl || undefined),
+          order: typeof b.order === 'number' ? b.order : mergedBoxes.length,
+          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : b.hasUnreadNewInput
+        }));
+      } else {
+        mergedBoxes.push(sanitizeServerBox({
+          ...b,
+          order: typeof b.order === 'number' ? b.order : mergedBoxes.length
+        }));
+      }
+    }
+
+    // Append genuinely new boxes present in incoming but not existing yet
+    for (const inB of incomingBoxes) {
+      if (inB && inB.id && !deletedBoxIds.has(inB.id) && !seenIds.has(inB.id)) {
+        seenIds.add(inB.id);
+        mergedBoxes.push(sanitizeServerBox({
+          ...inB,
+          order: mergedBoxes.length
         }));
       }
     }
@@ -1730,6 +1800,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
     isExplicitReset: Boolean(existingState?.isExplicitReset && mergedPatients.length === 0),
     resetConfirmed: Boolean(existingState?.resetConfirmed && mergedPatients.length === 0),
     lastResetAt: effectiveResetAt || null,
+    boxOrderUpdatedAt: effectiveBoxOrderUpdatedAt,
     deletedPatientIds: cumulativeDeletedList,
     lastUpdated: new Date().toISOString(),
   };

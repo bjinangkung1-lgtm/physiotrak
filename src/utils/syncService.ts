@@ -13,6 +13,7 @@ export interface SyncDataState {
   currentCallingBox?: QueueBox | null;
   lastUpdated?: string;
   lastResetAt?: string;
+  boxOrderUpdatedAt?: string | null;
   _senderDeviceId?: string;
   senderDeviceId?: string;
   deletedPatientIds?: string[];
