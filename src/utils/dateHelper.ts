@@ -33,3 +33,14 @@ export function getLocalDateTimeStringWIB(date: Date = new Date()): string {
     hour12: false,
   }).format(date).replace(' ', 'T');
 }
+
+/**
+ * Mengembalikan timestamp (epoch ms) untuk jam mulai layanan (default 08:00
+ * WIB) pada tanggal kalender WIB yang sama dengan `date`. WIB = UTC+7 tetap
+ * tanpa DST, jadi 08:00 WIB selalu sama dengan 01:00 UTC pada tanggal itu.
+ */
+export function getServiceStartTimestampWIB(date: Date, startHour: number = 8): number {
+  const wibDateStr = getLocalDateStringWIB(date); // YYYY-MM-DD
+  const [year, month, day] = wibDateStr.split('-').map(Number);
+  return Date.UTC(year, month - 1, day, startHour - 7, 0, 0, 0);
+}

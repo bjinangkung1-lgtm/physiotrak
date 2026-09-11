@@ -1,4 +1,12 @@
 import { PatientItem, QueueBox } from '../types';
+import { getServiceStartTimestampWIB } from './dateHelper';
+
+// Pelayanan IRM baru mulai memanggil pasien jam 08:00 WIB. Petugas kadang
+// sudah menginput/menulis pasien lebih awal (mis. jam 07:00) sebelum jam
+// buka, jadi jam mulai hitung respon time TIDAK BOLEH lebih awal dari jam
+// buka ini - kalau tidak, pasien yang diinput pagi-pagi sebelum buka akan
+// tercatat "menunggu"/"telat direspon" padahal pelayanannya belum dimulai.
+const SERVICE_START_HOUR_WIB = 8;
 
 export interface PatientTimeMetrics {
   patientId: string;
@@ -86,34 +94,43 @@ export function calculatePatientTimeMetrics(
 ): PatientTimeMetrics {
   const registeredAt = new Date(patient.createdAt);
   const regTime = registeredAt.getTime();
+  // Jam mulai hitung respon time: waktu input asli, TAPI tidak boleh lebih
+  // awal dari jam buka layanan (08:00 WIB) di tanggal yang sama. Jam input
+  // asli (registeredAt/regTime) tetap dipakai apa adanya untuk ditampilkan
+  // di kolom "Jam Masuk Input" - yang di-clamp hanya titik awal durasinya.
+  const effectiveStartTime = !isNaN(regTime)
+    ? Math.max(regTime, getServiceStartTimestampWIB(registeredAt, SERVICE_START_HOUR_WIB))
+    : regTime;
   const calledAt = patient.lastCalledAt ? new Date(patient.lastCalledAt) : undefined;
   const completedAt = patient.completedAt ? new Date(patient.completedAt) : undefined;
 
   const parentBox = boxes.find(b => b.id === patient.boxId);
-  const boxTitle = parentBox 
-    ? parentBox.title.split('(')[0].trim() 
+  const boxTitle = parentBox
+    ? parentBox.title.split('(')[0].trim()
     : ((patient as any).boxTitle ? String((patient as any).boxTitle).split('(')[0].trim() : 'Kotak');
-  const officerName = parentBox 
-    ? parentBox.officerName 
+  const officerName = parentBox
+    ? parentBox.officerName
     : ((patient as any).officerName || 'Petugas');
 
   let responseTimeMinutes = 0;
 
-  if (patient.completed && completedAt && !isNaN(completedAt.getTime()) && !isNaN(regTime)) {
-    // Respon time dihitung dari saat didaftarkan / ditulis hingga saat diceklis
-    responseTimeMinutes = Math.max(0, Math.round((completedAt.getTime() - regTime) / 60000));
+  if (patient.completed && completedAt && !isNaN(completedAt.getTime()) && !isNaN(effectiveStartTime)) {
+    // Respon time dihitung dari saat didaftarkan / ditulis (atau jam buka
+    // layanan, mana yang lebih akhir) hingga saat diceklis
+    responseTimeMinutes = Math.max(0, Math.round((completedAt.getTime() - effectiveStartTime) / 60000));
   } else if (patient.completed) {
     // Selesai tapi tidak ada timestamp completedAt spesifik
-    const elapsedMinutes = !isNaN(regTime) ? Math.round((now - regTime) / 60000) : 25;
+    const elapsedMinutes = !isNaN(effectiveStartTime) ? Math.round((now - effectiveStartTime) / 60000) : 25;
     if (elapsedMinutes > 180 || elapsedMinutes < 0) {
       responseTimeMinutes = 25; // standar durasi tindakan terapi IRM
     } else {
       responseTimeMinutes = Math.max(0, elapsedMinutes);
     }
   } else {
-    // Pasien masih antre / berjalan -> Waktu respon dihitung dari pendaftaran hingga saat ini
+    // Pasien masih antre / berjalan -> Waktu respon dihitung dari pendaftaran
+    // (atau jam buka layanan) hingga saat ini
     const isToday = !isNaN(regTime) && new Date().toDateString() === registeredAt.toDateString();
-    const elapsedMinutes = !isNaN(regTime) ? Math.round((now - regTime) / 60000) : 15;
+    const elapsedMinutes = !isNaN(effectiveStartTime) ? Math.round((now - effectiveStartTime) / 60000) : 15;
     if (!isToday && elapsedMinutes > 180) {
       responseTimeMinutes = 35;
     } else {
