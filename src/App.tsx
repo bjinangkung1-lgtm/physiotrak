@@ -553,6 +553,7 @@ export default function App() {
   const lastAnnouncedCallRef = React.useRef<string | null>(null);
   const deletedPatientIdsRef = React.useRef<string[]>([]);
   const deletedBoxIdsRef = React.useRef<string[]>([]);
+  const broadcastDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Check URL query parameters on startup (e.g. ?mode=tv)
   useEffect(() => {
@@ -963,25 +964,42 @@ export default function App() {
 
     hasLocalMutationRef.current = false;
 
-    const localTombstones = Array.from(getLocalTombstones());
-    const combinedDeleted = Array.from(new Set([...deletedPatientIdsRef.current, ...localTombstones]));
-    const deletedP = combinedDeleted.length > 0 ? combinedDeleted : undefined;
-    const deletedB = deletedBoxIdsRef.current.length > 0 ? [...deletedBoxIdsRef.current] : undefined;
-    deletedPatientIdsRef.current = [];
-    deletedBoxIdsRef.current = [];
+    // Debounce the actual network broadcast: several quick, separate user
+    // actions (e.g. checking off multiple patients in a row) each re-run this
+    // effect and previously fired one full-state POST apiece, which queued up
+    // behind each other on the server (each doing full disk read+merge+write)
+    // and delayed how fast peers saw the latest queue. Coalescing a short
+    // burst into a single POST with the latest state cuts that queueing delay
+    // without meaningfully slowing down a single isolated action. Tombstones
+    // are read from the refs only when the broadcast actually fires, so
+    // deletions from a run that gets superseded before its timer fires are
+    // never lost - they simply ride along with the next flush.
+    if (broadcastDebounceTimerRef.current) {
+      clearTimeout(broadcastDebounceTimerRef.current);
+    }
+    broadcastDebounceTimerRef.current = setTimeout(() => {
+      broadcastDebounceTimerRef.current = null;
 
-    realtimeSync.broadcastState({
-      boxes,
-      patients,
-      callLogs,
-      notifications,
-      currentCallingPatient,
-      currentCallingBox,
-      isExplicitReset: false,
-      resetConfirmed: false,
-      deletedPatientIds: deletedP,
-      deletedBoxIds: deletedB,
-    });
+      const localTombstones = Array.from(getLocalTombstones());
+      const combinedDeleted = Array.from(new Set([...deletedPatientIdsRef.current, ...localTombstones]));
+      const deletedP = combinedDeleted.length > 0 ? combinedDeleted : undefined;
+      const deletedB = deletedBoxIdsRef.current.length > 0 ? [...deletedBoxIdsRef.current] : undefined;
+      deletedPatientIdsRef.current = [];
+      deletedBoxIdsRef.current = [];
+
+      realtimeSync.broadcastState({
+        boxes,
+        patients,
+        callLogs,
+        notifications,
+        currentCallingPatient,
+        currentCallingBox,
+        isExplicitReset: false,
+        resetConfirmed: false,
+        deletedPatientIds: deletedP,
+        deletedBoxIds: deletedB,
+      });
+    }, 250);
   }, [boxes, patients, callLogs, notifications, currentCallingPatient, currentCallingBox]);
 
   // Handle Calling a Patient

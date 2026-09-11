@@ -777,6 +777,15 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
 
     if (existingIdx >= 0) {
       const current = masterPatients[existingIdx];
+      // Keep the master record's name in sync with the active queue entry.
+      // Without this, a typo fixed on the live queue (e.g. via "Edit Pasien")
+      // never reaches patients_master.json, so the corrected name gets
+      // silently overwritten by the stale one again the next time this
+      // patient is re-registered from the master/autocomplete list.
+      if (cleanName && current.patientName !== cleanName) {
+        current.patientName = cleanName;
+        masterUpdated = true;
+      }
       // Update last visited date and increment if new visit day
       if (current.lastVisitDate !== today) {
         current.lastVisitDate = today;
@@ -795,6 +804,9 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
         current.phoneNumber = p.phoneNumber;
         masterUpdated = true;
       }
+      if (masterUpdated) {
+        current.updatedAt = new Date().toISOString();
+      }
     } else {
       // Auto-register new patient to master if not found
       masterPatients.push({
@@ -812,6 +824,7 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
         lastVisitDate: today,
         totalVisits: 1,
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
       masterUpdated = true;
     }
@@ -859,6 +872,38 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
 
   dailyArchive[today] = Array.from(visitsMap.values());
   saveDailyArchive(dailyArchive);
+}
+
+// syncPatientsToMasterAndArchive does 2 extra JSON file read+writes (master
+// patients + daily archive, both unbounded and growing over the clinic's
+// lifetime) on top of the main queue_store.json write. Running it inline on
+// every single /api/queue POST (i.e. on every field edit, not just on
+// meaningful visit changes) adds latency to every device's realtime sync and
+// blocks the SSE broadcast to the other ~30 connected devices behind it.
+// Debounce it like the Firestore mirror below: coalesce a burst of rapid
+// edits (typing, toggling checkboxes, calling/completing patients) into a
+// single archive/master write shortly after things settle down, without
+// delaying the broadcastUpdate() that peers rely on to see the queue change.
+let masterArchiveDebounceTimer: NodeJS.Timeout | null = null;
+let pendingMasterArchivePatients: any[] | null = null;
+
+function scheduleSyncPatientsToMasterAndArchive(patients: any[]) {
+  pendingMasterArchivePatients = patients;
+  if (masterArchiveDebounceTimer) {
+    clearTimeout(masterArchiveDebounceTimer);
+  }
+  masterArchiveDebounceTimer = setTimeout(() => {
+    masterArchiveDebounceTimer = null;
+    const toSync = pendingMasterArchivePatients;
+    pendingMasterArchivePatients = null;
+    if (toSync) {
+      try {
+        syncPatientsToMasterAndArchive(toSync);
+      } catch (err) {
+        console.error('[MasterArchiveSync] Deferred sync error:', err);
+      }
+    }
+  }, 1500);
 }
 
 // Serve uploaded images statically
@@ -1741,12 +1786,15 @@ app.post('/api/queue', async (req, res) => {
 
       saveStateToFile(mergedState);
 
-      if (Array.isArray(mergedState.patients) && mergedState.patients.length > 0) {
-        syncPatientsToMasterAndArchive(mergedState.patients);
-      }
-
+      // Broadcast to peers immediately so other devices see the queue change
+      // as fast as possible; the master-patient/daily-archive bookkeeping
+      // below is not needed for the live queue view and is deferred instead.
       broadcastUpdate({ type: 'SYNC_STATE', state: mergedState, senderDeviceId });
       console.log(`[QueueSync] Synced from device ${senderDeviceId || 'unknown'}: ${mergedState.patients.length} patients, ${mergedState.boxes.length} boxes.`);
+
+      if (Array.isArray(mergedState.patients) && mergedState.patients.length > 0) {
+        scheduleSyncPatientsToMasterAndArchive(mergedState.patients);
+      }
     });
 
     res.json({ status: 'ok', updated: new Date().toISOString() });
