@@ -1,0 +1,100 @@
+{
+  "entities": {
+    "SystemState": {
+      "title": "SystemState",
+      "description": "State of queue boxes, active patients, and system configs",
+      "type": "object",
+      "properties": {
+        "boxes": {
+          "type": "array",
+          "description": "List of active queue boxes"
+        },
+        "patients": {
+          "type": "array",
+          "description": "List of active queue patients"
+        },
+        "callLogs": {
+          "type": "array",
+          "description": "Recent calling history"
+        },
+        "lastUpdated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last timestamp of state change"
+        }
+      }
+    },
+    "MasterPatient": {
+      "title": "MasterPatient",
+      "description": "Master medical record data for clinic patients",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "medicalRecordNo": { "type": "string" },
+        "name": { "type": "string" },
+        "gender": { "type": "string" },
+        "birthDate": { "type": "string" },
+        "category": { "type": "string" },
+        "registeredAt": { "type": "string" }
+      }
+    },
+    "DailyArchive": {
+      "title": "DailyArchive",
+      "description": "Daily snapshot archives of patient visits",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "visits": { "type": "array" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "SecurityConfig": {
+      "title": "SecurityConfig",
+      "description": "System security passwords configuration",
+      "type": "object",
+      "properties": {
+        "appPassword": { "type": "string" },
+        "databasePassword": { "type": "string" },
+        "lastUpdated": { "type": "string" }
+      }
+    },
+    "PhotoRecord": {
+      "title": "PhotoRecord",
+      "description": "Compressed persistent clinic photos and box instruction images",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "dataUrl": { "type": "string" },
+        "filename": { "type": "string" },
+        "title": { "type": "string" },
+        "originalName": { "type": "string" },
+        "boxId": { "type": "string" },
+        "boxTitle": { "type": "string" },
+        "size": { "type": "number" },
+        "uploadedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/system_state/{docId}": {
+      "schema": "#/entities/SystemState",
+      "description": "Current active clinic queue state and real-time boxes"
+    },
+    "/system_state/security_config": {
+      "schema": "#/entities/SecurityConfig",
+      "description": "System master passwords synchronization document"
+    },
+    "/master_patients/{patientId}": {
+      "schema": "#/entities/MasterPatient",
+      "description": "Master patient database collection"
+    },
+    "/daily_archives/{dateId}": {
+      "schema": "#/entities/DailyArchive",
+      "description": "Archive of daily patient services"
+    },
+    "/irm_photos/{photoId}": {
+      "schema": "#/entities/PhotoRecord",
+      "description": "Persistent cross-device compressed photos collection"
+    }
+  }
+}

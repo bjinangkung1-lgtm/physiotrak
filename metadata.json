@@ -1,0 +1,6 @@
+{
+  "name": "Smart IRM RSPP",
+  "description": "Sistem antrian digital cerdas Instalasi Rehabilitasi Medis RSPP dengan analitik sebaran utilisasi 8 alat terapi (MWD, TENS, US, IRR, Parafin, Nebu, Cryo, Vaccum), rating diagnosa ICF WHO, analitik produktivitas terapis, dan sinkronisasi real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
