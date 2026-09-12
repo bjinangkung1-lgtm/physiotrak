@@ -70,7 +70,9 @@ export const RanapHistoryModal: React.FC<RanapHistoryModalProps> = ({ isOpen, on
   };
 
   return (
-    <div className="fixed inset-0 z-60 bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+    // z-70: sengaja lebih tinggi dari RanapQueueModal (z-60) yang membukanya,
+    // supaya selalu tampil di depan tanpa bergantung urutan render DOM.
+    <div className="fixed inset-0 z-70 bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
       <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         <div className="bg-gradient-to-r from-rose-800 to-slate-900 text-white p-4 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">

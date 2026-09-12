@@ -53,7 +53,11 @@ export const AddRanapPatientModal: React.FC<AddRanapPatientModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+    // z-70: sengaja lebih tinggi dari RanapQueueModal (z-60) yang membukanya,
+    // supaya popup ini SELALU tampil di depan tanpa bergantung urutan render
+    // DOM (dua modal dengan z-index sama akan gampang salah susun kalau ada
+    // yang mengubah urutan komponen di kemudian hari).
+    <div className="fixed inset-0 z-70 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
         <div className="bg-rose-700 text-white p-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
@@ -120,6 +124,7 @@ export const AddRanapPatientModal: React.FC<AddRanapPatientModalProps> = ({
               <input
                 type="text"
                 required
+                autoFocus
                 value={patientName}
                 onChange={(e) => setPatientName(e.target.value)}
                 placeholder="Contoh: BUDI SANTOSO, TN"
