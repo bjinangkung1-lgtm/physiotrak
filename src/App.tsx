@@ -886,10 +886,18 @@ export default function App() {
             return true;
           });
 
+          // PENTING: jangan pernah anggap array pasien kosong SENDIRIAN sebagai
+          // tanda reset - itu juga persis kondisi server yang baru cold-start
+          // dan "amnesia" (queue_store.json hilang karena disk lokal ephemeral,
+          // lihat hydrateStateFromFirestoreIfNeeded). Kalau ini dianggap reset,
+          // device langsung menghapus localStorage & state pasiennya SENDIRI -
+          // yang justru satu-satunya salinan yang masih benar saat itu - membuat
+          // antrean tampak kosong total padahal tidak ada yang menekan reset.
+          // Pola ini sudah benar di 2 tempat lain (SSE & Cloud Firestore hydrate
+          // di atas): butuh isExplicitReset/resetConfirmed, bukan sekadar kosong.
           const isServerReset = Boolean(
             data.state.isExplicitReset ||
-            data.state.resetConfirmed ||
-            validServerPatients.length === 0
+            data.state.resetConfirmed
           );
 
           if (isServerReset) {
