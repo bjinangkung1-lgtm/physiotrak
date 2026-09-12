@@ -1,4 +1,4 @@
-import { QueueBox, PatientItem, CallHistoryRecord, AppNotification, SavedOfficer } from '../types';
+import { QueueBox, PatientItem, CallHistoryRecord, AppNotification, SavedOfficer, RanapQueueItem } from '../types';
 import { cloudDatabaseService } from './cloudDatabaseService';
 import { syncAppPasswordFromCloud } from './appAuthService';
 import { syncDatabasePasswordFromCloud } from './databaseService';
@@ -9,6 +9,9 @@ export interface SyncDataState {
   callLogs: CallHistoryRecord[];
   notifications: AppNotification[];
   savedOfficers?: SavedOfficer[];
+  // Antrean Ranap (rawat inap) di sidebar - terpisah dari `patients` supaya
+  // tidak ikut dihitung oleh Respon Time kotak antrean.
+  ranapQueue?: RanapQueueItem[];
   currentCallingPatient?: PatientItem | null;
   currentCallingBox?: QueueBox | null;
   lastUpdated?: string;
@@ -18,6 +21,7 @@ export interface SyncDataState {
   senderDeviceId?: string;
   deletedPatientIds?: string[];
   deletedBoxIds?: string[];
+  deletedRanapIds?: string[];
   isExplicitReset?: boolean;
   resetConfirmed?: boolean;
 }

@@ -33,6 +33,7 @@ const QUEUE_STATE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'current_queu
 // (disk lokal hilang) rekap bulanan & database pasien master ikut hilang.
 const DAILY_ARCHIVE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'daily_archive');
 const MASTER_PATIENTS_DOC_REF = doc(serverFirestoreDb, 'system_state', 'master_patients');
+const RANAP_HISTORY_DOC_REF = doc(serverFirestoreDb, 'system_state', 'ranap_history');
 
 // Increase payload limit for image uploads
 app.use(express.json({ limit: '50mb' }));
@@ -43,6 +44,7 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'queue_store.json');
 const MASTER_PATIENTS_FILE = path.join(DATA_DIR, 'patients_master.json');
 const DAILY_ARCHIVE_FILE = path.join(DATA_DIR, 'daily_archive.json');
+const RANAP_HISTORY_FILE = path.join(DATA_DIR, 'ranap_history.json');
 const PHOTOS_DB_FILE = path.join(DATA_DIR, 'photos_db.json');
 const LAIN_LAIN_DB_FILE = path.join(DATA_DIR, 'lain_lain_db.json');
 const INVENTORY_DB_FILE = path.join(DATA_DIR, 'inventory_db.json');
@@ -297,6 +299,36 @@ function saveDailyArchive(archive: Record<string, any[]>) {
   // per terapis walau disk lokalnya sendiri kosong (lihat
   // hydrateDailyArchiveFromFirestoreIfNeeded).
   mirrorDailyArchiveToFirestore(archive);
+}
+
+// Ranap History File Helpers (daftar RanapHistoryItem yang sudah diceklis
+// selesai dari Antrean Ranap sidebar - dipakai untuk "informasi di lain hari")
+function loadRanapHistory(): any[] {
+  try {
+    if (fs.existsSync(RANAP_HISTORY_FILE)) {
+      const content = fs.readFileSync(RANAP_HISTORY_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Error reading RANAP_HISTORY_FILE:', err);
+  }
+  const initial: any[] = [];
+  saveRanapHistory(initial);
+  return initial;
+}
+
+function saveRanapHistory(history: any[]) {
+  try {
+    safeAtomicWriteJson(RANAP_HISTORY_FILE, history);
+  } catch (err) {
+    console.error('Error writing RANAP_HISTORY_FILE:', err);
+  }
+  // Cadangkan ke Cloud Firestore di background supaya riwayat ranap tidak
+  // ikut hilang kalau instance di-recycle (lihat hydrateRanapHistoryFromFirestoreIfNeeded).
+  mirrorRanapHistoryToFirestore(history);
 }
 
 // Photos Database File Helpers
@@ -1292,6 +1324,7 @@ function getInitialServerState() {
     patients: [],
     callLogs: [],
     notifications: [],
+    ranapQueue: [],
     currentCallingPatient: null,
     currentCallingBox: null,
     boxOrderUpdatedAt: null,
@@ -1597,6 +1630,61 @@ async function hydrateMasterPatientsFromFirestoreIfNeeded(): Promise<void> {
   }
 }
 
+// ranap_history.json (riwayat pasien Antrean Ranap yang sudah diceklis selesai,
+// dipakai untuk "informasi di lain hari") - mirror+hydrate dengan pola yang sama.
+let ranapHistoryMirrorDebounceTimer: NodeJS.Timeout | null = null;
+let pendingRanapHistoryMirror: any[] | null = null;
+
+async function mirrorRanapHistoryToFirestore(history: any[]): Promise<void> {
+  if (isFirestoreMirrorDisabled) return;
+  pendingRanapHistoryMirror = history;
+
+  if (ranapHistoryMirrorDebounceTimer) {
+    clearTimeout(ranapHistoryMirrorDebounceTimer);
+  }
+  ranapHistoryMirrorDebounceTimer = setTimeout(async () => {
+    ranapHistoryMirrorDebounceTimer = null;
+    if (isFirestoreMirrorDisabled) return;
+    const current = pendingRanapHistoryMirror;
+    if (!current) return;
+    try {
+      const sanitized = JSON.parse(JSON.stringify(current));
+      await setDoc(RANAP_HISTORY_DOC_REF, {
+        history: sanitized,
+        lastMirroredAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      handleFirestoreQuotaError(err, 'RanapHistoryMirror');
+    }
+  }, 5000);
+}
+
+async function hydrateRanapHistoryFromFirestoreIfNeeded(): Promise<void> {
+  try {
+    if (fs.existsSync(RANAP_HISTORY_FILE)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(RANAP_HISTORY_FILE, 'utf-8'));
+        if (Array.isArray(raw) && raw.length > 0) {
+          return;
+        }
+      } catch {
+        // file corrupt, lanjutkan hydrate
+      }
+    }
+
+    const snapshot = await getDoc(RANAP_HISTORY_DOC_REF);
+    if (!snapshot.exists()) return;
+
+    const cloudHistory = snapshot.data()?.history;
+    if (Array.isArray(cloudHistory) && cloudHistory.length > 0) {
+      console.log(`[FirestoreHydrate] ranap_history.json lokal kosong (kemungkinan instance baru/di-restart). Memulihkan ${cloudHistory.length} riwayat ranap dari cadangan Cloud Firestore.`);
+      safeAtomicWriteJson(RANAP_HISTORY_FILE, cloudHistory);
+    }
+  } catch (err) {
+    console.warn('[FirestoreHydrate] Gagal memulihkan ranap_history dari Cloud Firestore, melanjutkan dengan state lokal:', err);
+  }
+}
+
 // Dipanggil sekali saat server baru menyala. Kalau file lokal ternyata kosong/baru
 // (indikasi instance baru/di-recycle oleh platform hosting), pulihkan dari cadangan
 // Cloud Firestore sebelum mulai melayani request.
@@ -1651,6 +1739,11 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       callLogs: [],
       notifications: [],
       savedOfficers: Array.isArray(incomingPayload.savedOfficers) ? incomingPayload.savedOfficers : (existingState.savedOfficers || []),
+      // Antrean Ranap TIDAK ikut ter-reset oleh "Bersihkan Antrean" harian -
+      // pasien ranap bisa berhari-hari, jadi bukan bagian dari antrean walk-in
+      // harian yang di-reset di sini.
+      ranapQueue: Array.isArray(existingState.ranapQueue) ? existingState.ranapQueue : [],
+      deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
       currentCallingPatient: null,
       currentCallingBox: null,
       isExplicitReset: true,
@@ -1751,6 +1844,40 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   }
 
   const mergedPatients = Array.from(patientMap.values());
+
+  // 1b. Reconcile Antrean Ranap (rawat inap, sidebar) - terpisah dari `patients`
+  // supaya tidak pernah ikut dihitung Respon Time kotak antrean. Pola tombstone
+  // & upsert-by-id sama seperti pasien di atas, tapi tanpa field completed/
+  // calledCount (item ranap dihapus dari daftar aktif begitu diceklis selesai,
+  // lalu diarsipkan ke ranap_history.json lewat endpoint terpisah).
+  const existingRanapQueue: any[] = Array.isArray(existingState.ranapQueue) ? existingState.ranapQueue : [];
+  const incomingRanapQueue: any[] = Array.isArray(incomingPayload.ranapQueue) ? incomingPayload.ranapQueue : [];
+
+  const existingDeletedRanap: string[] = Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [];
+  const incomingDeletedRanap: string[] = Array.isArray(incomingPayload.deletedRanapIds) ? incomingPayload.deletedRanapIds : [];
+  const cumulativeDeletedRanapList = Array.from(new Set([...existingDeletedRanap, ...incomingDeletedRanap])).slice(-1000);
+  const deletedRanapIds = new Set(cumulativeDeletedRanapList);
+
+  const ranapMap = new Map<string, any>();
+  for (const r of existingRanapQueue) {
+    if (r && r.id && !deletedRanapIds.has(r.id)) {
+      ranapMap.set(r.id, { ...r });
+    }
+  }
+  for (const inR of incomingRanapQueue) {
+    if (!inR || !inR.id || deletedRanapIds.has(inR.id)) continue;
+    const existing = ranapMap.get(inR.id);
+    if (!existing) {
+      ranapMap.set(inR.id, { ...inR, createdAt: inR.createdAt || new Date().toISOString() });
+    } else {
+      ranapMap.set(inR.id, {
+        ...existing,
+        ...inR,
+        createdAt: existing.createdAt || inR.createdAt || new Date().toISOString(),
+      });
+    }
+  }
+  const mergedRanapQueue = Array.from(ranapMap.values());
 
   // 2. Reconcile Boxes
   const existingBoxes: any[] = Array.isArray(existingState.boxes) ? existingState.boxes : [];
@@ -1941,6 +2068,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
     callLogs: mergedLogs,
     notifications: mergedNotifs,
     savedOfficers: mergedOfficers,
+    ranapQueue: mergedRanapQueue,
     currentCallingPatient,
     currentCallingBox,
     isExplicitReset: Boolean(existingState?.isExplicitReset && mergedPatients.length === 0),
@@ -1948,6 +2076,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
     lastResetAt: effectiveResetAt || null,
     boxOrderUpdatedAt: effectiveBoxOrderUpdatedAt,
     deletedPatientIds: cumulativeDeletedList,
+    deletedRanapIds: cumulativeDeletedRanapList,
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -2057,6 +2186,71 @@ app.post('/api/queue/reset', async (req, res) => {
 // Master Patient Registry APIs
 
 // GET /api/master-patients?search=...
+// GET /api/ranap-history - Riwayat pasien Antrean Ranap yang sudah diceklis
+// selesai (dipakai untuk "informasi di lain hari"), dengan filter opsional.
+app.get('/api/ranap-history', (req, res) => {
+  try {
+    const category = typeof req.query.category === 'string' ? req.query.category : '';
+    const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase().trim() : '';
+    const startDate = typeof req.query.startDate === 'string' ? req.query.startDate : '';
+    const endDate = typeof req.query.endDate === 'string' ? req.query.endDate : '';
+
+    let history = loadRanapHistory();
+
+    if (category && category !== 'all') {
+      history = history.filter((h: any) => h.category === category);
+    }
+    if (startDate) {
+      history = history.filter((h: any) => (h.completedAt || '').slice(0, 10) >= startDate);
+    }
+    if (endDate) {
+      history = history.filter((h: any) => (h.completedAt || '').slice(0, 10) <= endDate);
+    }
+    if (search) {
+      history = history.filter((h: any) =>
+        (h.patientName && h.patientName.toLowerCase().includes(search)) ||
+        (h.medicalRecordNo && h.medicalRecordNo.toLowerCase().includes(search)) ||
+        (h.roomNumber && h.roomNumber.toLowerCase().includes(search)) ||
+        (h.diagnosis && h.diagnosis.toLowerCase().includes(search))
+      );
+    }
+
+    const sorted = [...history].sort((a: any, b: any) => new Date(b.completedAt || 0).getTime() - new Date(a.completedAt || 0).getTime());
+    res.json({ status: 'ok', history: sorted });
+  } catch (error: any) {
+    console.error('Error loading ranap history:', error);
+    res.status(500).json({ error: error?.message || 'Gagal memuat riwayat antrean ranap' });
+  }
+});
+
+// POST /api/ranap-history - Arsipkan satu item Antrean Ranap yang baru diceklis selesai
+app.post('/api/ranap-history', (req, res) => {
+  try {
+    const item = req.body;
+    if (!item || !item.id || !item.patientName || !item.category) {
+      return res.status(400).json({ error: 'Data riwayat ranap tidak lengkap' });
+    }
+
+    const history = loadRanapHistory();
+    const savedItem = {
+      ...item,
+      completedAt: item.completedAt || new Date().toISOString(),
+    };
+    const existingIndex = history.findIndex((h: any) => h.id === item.id);
+    if (existingIndex >= 0) {
+      history[existingIndex] = { ...history[existingIndex], ...savedItem };
+    } else {
+      history.unshift(savedItem);
+    }
+
+    saveRanapHistory(history);
+    res.json({ status: 'ok', item: savedItem });
+  } catch (error: any) {
+    console.error('Error saving ranap history:', error);
+    res.status(500).json({ error: error?.message || 'Gagal menyimpan riwayat antrean ranap' });
+  }
+});
+
 app.get('/api/master-patients', (req, res) => {
   const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase().trim() : '';
   const patients = loadMasterPatients();
@@ -3244,6 +3438,7 @@ async function startServer() {
     hydrateStateFromFirestoreIfNeeded(),
     hydrateDailyArchiveFromFirestoreIfNeeded(),
     hydrateMasterPatientsFromFirestoreIfNeeded(),
+    hydrateRanapHistoryFromFirestoreIfNeeded(),
   ]);
 
   // Vite integration in development
@@ -3311,6 +3506,19 @@ async function flushPendingFirestoreMirrors(): Promise<void> {
           patients: JSON.parse(JSON.stringify(pendingMasterPatientsMirror)),
           lastMirroredAt: new Date().toISOString(),
         }).catch((err) => console.warn('[Shutdown] Gagal flush master patients mirror:', err))
+      );
+    }
+  }
+
+  if (ranapHistoryMirrorDebounceTimer) {
+    clearTimeout(ranapHistoryMirrorDebounceTimer);
+    ranapHistoryMirrorDebounceTimer = null;
+    if (pendingRanapHistoryMirror && !isFirestoreMirrorDisabled) {
+      tasks.push(
+        setDoc(RANAP_HISTORY_DOC_REF, {
+          history: JSON.parse(JSON.stringify(pendingRanapHistoryMirror)),
+          lastMirroredAt: new Date().toISOString(),
+        }).catch((err) => console.warn('[Shutdown] Gagal flush ranap history mirror:', err))
       );
     }
   }

@@ -1,4 +1,4 @@
-import { MasterPatient, DailyPatientVisit } from '../types';
+import { MasterPatient, DailyPatientVisit, RanapHistoryItem } from '../types';
 import { cloudDatabaseService } from './cloudDatabaseService';
 import { getLocalDateStringWIB } from './dateHelper';
 import * as XLSX from 'xlsx';
@@ -867,6 +867,43 @@ export const databaseService = {
       console.error('Failed to save daily visit:', err);
       return null;
     }
+  },
+
+  // Riwayat Antrean Ranap (dipakai untuk "informasi di lain hari")
+  async getRanapHistory(filters?: { category?: string; search?: string; startDate?: string; endDate?: string }): Promise<RanapHistoryItem[]> {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.category && filters.category !== 'all') params.set('category', filters.category);
+      if (filters?.search) params.set('search', filters.search);
+      if (filters?.startDate) params.set('startDate', filters.startDate);
+      if (filters?.endDate) params.set('endDate', filters.endDate);
+
+      const res = await fetch(`/api/ranap-history${params.toString() ? `?${params.toString()}` : ''}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.history)) return data.history;
+      }
+    } catch (err) {
+      console.warn('Failed to fetch ranap history:', err);
+    }
+    return [];
+  },
+
+  async saveRanapHistoryItem(item: RanapHistoryItem): Promise<RanapHistoryItem | null> {
+    try {
+      const res = await fetch('/api/ranap-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(item),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.item || item;
+      }
+    } catch (err) {
+      console.warn('Failed to save ranap history item:', err);
+    }
+    return null;
   }
 };
 

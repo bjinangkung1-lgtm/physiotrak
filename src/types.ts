@@ -358,3 +358,24 @@ export interface StockMutation {
   createdAt: string;
 }
 
+// ==================== ANTREAN RANAP (RAWAT INAP) - SIDEBAR ====================
+// Antrean terpisah dari `PatientItem`/kotak antrean supaya TIDAK ikut dihitung
+// oleh Respon Time (computeResponseTimeAnalytics hanya membaca `patients`).
+export type RanapCategory = 'fisio' | 'okupasi' | 'wicara';
+
+export interface RanapQueueItem {
+  id: string;
+  category: RanapCategory;
+  patientName: string;
+  medicalRecordNo: string;
+  roomNumber: string; // No. Ruangan, mis. "3", "4A" - dipakai untuk urutan otomatis
+  diagnosis?: string;
+  note?: string;
+  officerName?: string; // Terapis yang menangani / menginput
+  createdAt: string; // ISO string
+}
+
+export interface RanapHistoryItem extends RanapQueueItem {
+  completedAt: string; // ISO string saat diceklis selesai
+}
+
