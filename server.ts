@@ -26,6 +26,13 @@ const firestoreDatabaseId = (firebaseConfig as any).firestoreDatabaseId && (fire
   : undefined;
 const serverFirestoreDb = getFirestore(firebaseServerApp, firestoreDatabaseId);
 const QUEUE_STATE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'current_queue');
+// Cadangan untuk daily_archive.json (dipakai Laporan Harian & Laporan Bulanan
+// per terapis) dan patients_master.json (database pasien/autocomplete).
+// Sebelumnya HANYA queue_store.json yang punya cadangan+pemulihan Firestore -
+// kedua file ini tidak sama sekali, jadi setiap kali instance di-recycle
+// (disk lokal hilang) rekap bulanan & database pasien master ikut hilang.
+const DAILY_ARCHIVE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'daily_archive');
+const MASTER_PATIENTS_DOC_REF = doc(serverFirestoreDb, 'system_state', 'master_patients');
 
 // Increase payload limit for image uploads
 app.use(express.json({ limit: '50mb' }));
@@ -254,6 +261,10 @@ function saveMasterPatients(patients: any[]) {
   } catch (err) {
     console.error('Error writing MASTER_PATIENTS_FILE:', err);
   }
+  // Cadangkan ke Cloud Firestore di background supaya instance lain/instance
+  // yang baru dinyalakan ulang bisa memulihkan database pasien master walau
+  // disk lokalnya sendiri kosong (lihat hydrateMasterPatientsFromFirestoreIfNeeded).
+  mirrorMasterPatientsToFirestore(patients);
 }
 
 // Daily Archive File Helpers (Map of date YYYY-MM-DD -> list of DailyPatientVisit)
@@ -281,6 +292,11 @@ function saveDailyArchive(archive: Record<string, any[]>) {
   } catch (err) {
     console.error('Error writing DAILY_ARCHIVE_FILE:', err);
   }
+  // Cadangkan ke Cloud Firestore di background supaya instance lain/instance
+  // yang baru dinyalakan ulang bisa memulihkan rekap kunjungan harian & bulanan
+  // per terapis walau disk lokalnya sendiri kosong (lihat
+  // hydrateDailyArchiveFromFirestoreIfNeeded).
+  mirrorDailyArchiveToFirestore(archive);
 }
 
 // Photos Database File Helpers
@@ -1438,6 +1454,147 @@ async function mirrorStateToFirestore(state: any): Promise<void> {
       }
     }
   }, 5000);
+}
+
+// Helper bersama untuk mendeteksi error kuota Firestore & menonaktifkan mirroring
+// sementara (dipakai oleh ketiga mirror: queue state, daily archive, master patients).
+function handleFirestoreQuotaError(err: any, label: string): boolean {
+  const errMsg = err?.message || String(err);
+  const isQuotaError =
+    errMsg.includes('RESOURCE_EXHAUSTED') ||
+    errMsg.includes('Quota exceeded') ||
+    err?.code === 'resource-exhausted' ||
+    err?.code === 8;
+  if (isQuotaError) {
+    isFirestoreMirrorDisabled = true;
+    try {
+      fs.writeFileSync(FIRESTORE_QUOTA_FLAG_FILE, Date.now().toString(), 'utf-8');
+    } catch {
+      // ignore
+    }
+    console.warn(
+      `[${label}] Kuota gratis harian Cloud Firestore telah mencapai batas (RESOURCE_EXHAUSTED). Cloud mirroring dinonaktifkan otomatis. Seluruh penyimpanan lokal, REST API, & SSE tetap berjalan 100% normal.`
+    );
+  } else {
+    console.warn(`[${label}] Gagal mencadangkan ke Cloud Firestore:`, err);
+  }
+  return isQuotaError;
+}
+
+// daily_archive.json (dipakai Laporan Harian & Laporan Bulanan per terapis) sebelumnya
+// TIDAK punya cadangan Firestore sama sekali - hanya queue_store.json yang punya. Jadi
+// setiap kali instance di-recycle oleh platform hosting (disk lokal ephemeral hilang),
+// seluruh rekap kunjungan harian/bulanan yang terbentuk otomatis dari sinkronisasi
+// antrean (bukan lewat aksi eksplisit per-kunjungan) hilang permanen tanpa jejak.
+let dailyArchiveMirrorDebounceTimer: NodeJS.Timeout | null = null;
+let pendingDailyArchiveMirror: Record<string, any[]> | null = null;
+
+async function mirrorDailyArchiveToFirestore(archive: Record<string, any[]>): Promise<void> {
+  if (isFirestoreMirrorDisabled) return;
+  pendingDailyArchiveMirror = archive;
+
+  if (dailyArchiveMirrorDebounceTimer) {
+    clearTimeout(dailyArchiveMirrorDebounceTimer);
+  }
+  dailyArchiveMirrorDebounceTimer = setTimeout(async () => {
+    dailyArchiveMirrorDebounceTimer = null;
+    if (isFirestoreMirrorDisabled) return;
+    const current = pendingDailyArchiveMirror;
+    if (!current) return;
+    try {
+      const sanitized = JSON.parse(JSON.stringify(current));
+      await setDoc(DAILY_ARCHIVE_DOC_REF, {
+        archive: sanitized,
+        lastMirroredAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      handleFirestoreQuotaError(err, 'DailyArchiveMirror');
+    }
+  }, 5000);
+}
+
+async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
+  try {
+    if (fs.existsSync(DAILY_ARCHIVE_FILE)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(DAILY_ARCHIVE_FILE, 'utf-8'));
+        if (raw && typeof raw === 'object' && Object.keys(raw).length > 0) {
+          return;
+        }
+      } catch {
+        // file corrupt, lanjutkan hydrate
+      }
+    }
+
+    const snapshot = await getDoc(DAILY_ARCHIVE_DOC_REF);
+    if (!snapshot.exists()) return;
+
+    const cloudArchive = snapshot.data()?.archive;
+    if (cloudArchive && typeof cloudArchive === 'object' && Object.keys(cloudArchive).length > 0) {
+      console.log(`[FirestoreHydrate] daily_archive.json lokal kosong (kemungkinan instance baru/di-restart). Memulihkan ${Object.keys(cloudArchive).length} tanggal arsip dari cadangan Cloud Firestore.`);
+      safeAtomicWriteJson(DAILY_ARCHIVE_FILE, cloudArchive);
+    }
+  } catch (err) {
+    console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive dari Cloud Firestore, melanjutkan dengan state lokal:', err);
+  }
+}
+
+// patients_master.json (database pasien untuk autocomplete & rekam medis) - sama seperti
+// daily archive, jalur registrasi otomatis (syncPatientsToMasterAndArchive, dipanggil di
+// setiap update antrean) sebelumnya tidak punya cadangan Firestore-nya sendiri. Client punya
+// self-heal 3-arah (server+local+cloud) yang bisa menutupi ini SETELAH seseorang membuka
+// tampilan yang memuat master pasien, tapi sebelum itu terjadi data di server tetap kosong.
+let masterPatientsMirrorDebounceTimer: NodeJS.Timeout | null = null;
+let pendingMasterPatientsMirror: any[] | null = null;
+
+async function mirrorMasterPatientsToFirestore(patients: any[]): Promise<void> {
+  if (isFirestoreMirrorDisabled) return;
+  pendingMasterPatientsMirror = patients;
+
+  if (masterPatientsMirrorDebounceTimer) {
+    clearTimeout(masterPatientsMirrorDebounceTimer);
+  }
+  masterPatientsMirrorDebounceTimer = setTimeout(async () => {
+    masterPatientsMirrorDebounceTimer = null;
+    if (isFirestoreMirrorDisabled) return;
+    const current = pendingMasterPatientsMirror;
+    if (!current) return;
+    try {
+      const sanitized = JSON.parse(JSON.stringify(current));
+      await setDoc(MASTER_PATIENTS_DOC_REF, {
+        patients: sanitized,
+        lastMirroredAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      handleFirestoreQuotaError(err, 'MasterPatientsMirror');
+    }
+  }, 5000);
+}
+
+async function hydrateMasterPatientsFromFirestoreIfNeeded(): Promise<void> {
+  try {
+    if (fs.existsSync(MASTER_PATIENTS_FILE)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(MASTER_PATIENTS_FILE, 'utf-8'));
+        if (Array.isArray(raw) && raw.length > 0) {
+          return;
+        }
+      } catch {
+        // file corrupt, lanjutkan hydrate
+      }
+    }
+
+    const snapshot = await getDoc(MASTER_PATIENTS_DOC_REF);
+    if (!snapshot.exists()) return;
+
+    const cloudPatients = snapshot.data()?.patients;
+    if (Array.isArray(cloudPatients) && cloudPatients.length > 0) {
+      console.log(`[FirestoreHydrate] patients_master.json lokal kosong (kemungkinan instance baru/di-restart). Memulihkan ${cloudPatients.length} data pasien master dari cadangan Cloud Firestore.`);
+      safeAtomicWriteJson(MASTER_PATIENTS_FILE, cloudPatients);
+    }
+  } catch (err) {
+    console.warn('[FirestoreHydrate] Gagal memulihkan patients_master dari Cloud Firestore, melanjutkan dengan state lokal:', err);
+  }
 }
 
 // Dipanggil sekali saat server baru menyala. Kalau file lokal ternyata kosong/baru
@@ -3080,8 +3237,14 @@ app.get('/api/events', (req, res) => {
 async function startServer() {
   // Pulihkan state dari Cloud Firestore dulu kalau disk lokal instance ini kosong/baru
   // (mis. instance backend di-recycle oleh platform hosting saat idle) sebelum mulai
-  // melayani request, supaya device yang connect tidak melihat papan antrian kosong.
-  await hydrateStateFromFirestoreIfNeeded();
+  // melayani request, supaya device yang connect tidak melihat papan antrian kosong,
+  // rekap harian/bulanan per terapis kembali kosong, atau database pasien master
+  // kembali ke data contoh bawaan.
+  await Promise.all([
+    hydrateStateFromFirestoreIfNeeded(),
+    hydrateDailyArchiveFromFirestoreIfNeeded(),
+    hydrateMasterPatientsFromFirestoreIfNeeded(),
+  ]);
 
   // Vite integration in development
   if (process.env.NODE_ENV !== 'production') {
@@ -3102,5 +3265,75 @@ async function startServer() {
     console.log(`Sistem Antrian IRM RSPP Server running on http://0.0.0.0:${PORT}`);
   });
 }
+
+// Flush semua mirror Firestore yang masih tertunda (debounce 5 detik belum sempat
+// jalan) sebelum instance benar-benar dimatikan oleh platform hosting (SIGTERM saat
+// auto-scaling idle ke nol). Tanpa ini, perubahan yang terjadi persis sebelum
+// instance di-recycle (mis. mengatur ulang urutan kotak, lalu langsung ditinggal)
+// bisa ikut hilang dari Firestore juga - sehingga saat instance baru menyala,
+// hydrate...FromFirestoreIfNeeded() memulihkan snapshot yang sedikit basi, bukan
+// yang paling akhir.
+async function flushPendingFirestoreMirrors(): Promise<void> {
+  const tasks: Promise<any>[] = [];
+
+  if (mirrorDebounceTimer) {
+    clearTimeout(mirrorDebounceTimer);
+    mirrorDebounceTimer = null;
+    if (pendingMirrorState && !isFirestoreMirrorDisabled) {
+      tasks.push(
+        setDoc(QUEUE_STATE_DOC_REF, {
+          ...JSON.parse(JSON.stringify(pendingMirrorState)),
+          lastMirroredAt: new Date().toISOString(),
+        }).catch((err) => console.warn('[Shutdown] Gagal flush queue state mirror:', err))
+      );
+    }
+  }
+
+  if (dailyArchiveMirrorDebounceTimer) {
+    clearTimeout(dailyArchiveMirrorDebounceTimer);
+    dailyArchiveMirrorDebounceTimer = null;
+    if (pendingDailyArchiveMirror && !isFirestoreMirrorDisabled) {
+      tasks.push(
+        setDoc(DAILY_ARCHIVE_DOC_REF, {
+          archive: JSON.parse(JSON.stringify(pendingDailyArchiveMirror)),
+          lastMirroredAt: new Date().toISOString(),
+        }).catch((err) => console.warn('[Shutdown] Gagal flush daily archive mirror:', err))
+      );
+    }
+  }
+
+  if (masterPatientsMirrorDebounceTimer) {
+    clearTimeout(masterPatientsMirrorDebounceTimer);
+    masterPatientsMirrorDebounceTimer = null;
+    if (pendingMasterPatientsMirror && !isFirestoreMirrorDisabled) {
+      tasks.push(
+        setDoc(MASTER_PATIENTS_DOC_REF, {
+          patients: JSON.parse(JSON.stringify(pendingMasterPatientsMirror)),
+          lastMirroredAt: new Date().toISOString(),
+        }).catch((err) => console.warn('[Shutdown] Gagal flush master patients mirror:', err))
+      );
+    }
+  }
+
+  if (tasks.length > 0) {
+    console.log(`[Shutdown] Flushing ${tasks.length} pending Firestore mirror write(s) before exit...`);
+    await Promise.allSettled(tasks);
+  }
+}
+
+let isShuttingDown = false;
+async function handleShutdownSignal(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`[Shutdown] Received ${signal}, flushing pending Firestore writes before exit...`);
+  try {
+    await flushPendingFirestoreMirrors();
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => { void handleShutdownSignal('SIGTERM'); });
+process.on('SIGINT', () => { void handleShutdownSignal('SIGINT'); });
 
 startServer();
