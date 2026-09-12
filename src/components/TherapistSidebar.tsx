@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
-import { QueueBox, PatientItem, RanapQueueItem, RanapCategory } from '../types';
-import { RANAP_CATEGORY_ORDER, RANAP_CATEGORY_LABELS, groupRanapQueueByCategory } from '../utils/ranapQueueUtils';
+import React from 'react';
+import { QueueBox, PatientItem, RanapQueueItem } from '../types';
 import {
   X,
   Sparkles,
@@ -12,21 +11,15 @@ import {
   Database,
   Menu,
   ChevronRight,
-  ChevronDown,
   Clock,
   CheckCircle2,
-  Circle,
   Users,
   Layers,
   ArrowUpRight,
   Package,
   Boxes,
   BookOpen,
-  BedDouble,
-  Plus,
-  History,
-  Trash2,
-  DoorOpen
+  BedDouble
 } from 'lucide-react';
 
 interface TherapistSidebarProps {
@@ -49,12 +42,11 @@ interface TherapistSidebarProps {
   onOpenSop?: () => void;
   avgWaitMinutes?: number;
   overloadCount?: number;
-  // Antrean Ranap (rawat inap)
+  // Antrean Ranap (rawat inap) - satu link saja di sidebar, sistemnya
+  // sendiri dibuka lewat modal terpisah (RanapQueueModal) supaya sidebar
+  // tetap rapi.
   ranapQueue?: RanapQueueItem[];
-  onOpenAddRanapPatient?: (category: RanapCategory) => void;
-  onCompleteRanapPatient?: (id: string) => void;
-  onDeleteRanapPatient?: (id: string) => void;
-  onOpenRanapHistory?: () => void;
+  onOpenRanapQueue?: () => void;
 }
 
 export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
@@ -73,14 +65,8 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
   avgWaitMinutes = 0,
   overloadCount = 0,
   ranapQueue = [],
-  onOpenAddRanapPatient,
-  onCompleteRanapPatient,
-  onDeleteRanapPatient,
-  onOpenRanapHistory,
+  onOpenRanapQueue,
 }) => {
-  const [isRanapSectionOpen, setIsRanapSectionOpen] = useState(true);
-  const [confirmDeleteRanapId, setConfirmDeleteRanapId] = useState<string | null>(null);
-  const groupedRanap = groupRanapQueueByCategory(ranapQueue);
   const handleActionClick = (action?: () => void) => {
     if (action) {
       action();
@@ -139,135 +125,37 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
 
         {/* Scrollable Body Navigation Links */}
         <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
-          {/* ANTREAN RANAP (RAWAT INAP) - terpisah dari kotak antrean supaya
-              tidak mengganggu perhitungan Respon Time */}
-          <div className="rounded-2xl border border-rose-200 bg-rose-50/60 overflow-hidden">
+          {/* ANTREAN RANAP (RAWAT INAP) - satu link saja supaya sidebar tetap
+              rapi; klik untuk masuk ke sistem antrean ranap (modal
+              terpisah). Terpisah dari kotak antrean supaya tidak
+              mengganggu perhitungan Respon Time. */}
+          {onOpenRanapQueue && (
             <button
-              onClick={() => setIsRanapSectionOpen(prev => !prev)}
-              className="w-full p-3 flex items-center justify-between gap-2 cursor-pointer"
+              onClick={() => handleActionClick(onOpenRanapQueue)}
+              id="sidebar-menu-ranap-queue"
+              className="w-full p-3 rounded-2xl bg-rose-50/70 hover:bg-rose-100/90 text-left transition-all border border-rose-200/90 flex items-center justify-between gap-3 group cursor-pointer shadow-2xs hover:shadow-sm"
             >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shadow-xs shrink-0">
-                  <BedDouble className="w-4.5 h-4.5" />
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shadow-xs shrink-0 group-hover:scale-105 transition-transform">
+                  <BedDouble className="w-5 h-5" />
                 </div>
-                <div className="min-w-0 text-left">
-                  <span className="text-xs font-black text-slate-900 truncate block">
-                    Antrean Ranap (Rawat Inap)
-                  </span>
-                  <span className="text-[10px] text-rose-800 font-semibold">
-                    {ranapQueue.length} pasien aktif
-                  </span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-black text-slate-900 group-hover:text-rose-950 truncate">
+                      Antrean Ranap
+                    </span>
+                    <span className="text-[9px] font-extrabold bg-rose-200 text-rose-950 px-1.5 py-0.2 rounded shrink-0">
+                      {ranapQueue.length} Aktif
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 font-medium truncate mt-0.5">
+                    Rawat inap: Fisio, Okupasi &amp; Wicara
+                  </p>
                 </div>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                {onOpenRanapHistory && (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => { e.stopPropagation(); handleActionClick(onOpenRanapHistory); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleActionClick(onOpenRanapHistory); } }}
-                    className="p-1.5 rounded-lg text-rose-700 hover:bg-rose-200/70 cursor-pointer"
-                    title="Riwayat Antrean Ranap"
-                  >
-                    <History className="w-4 h-4" />
-                  </span>
-                )}
-                {isRanapSectionOpen ? (
-                  <ChevronDown className="w-4 h-4 text-rose-700" />
-                ) : (
-                  <ChevronRight className="w-4 h-4 text-rose-700" />
-                )}
-              </div>
+              <ChevronRight className="w-4 h-4 text-rose-700 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all shrink-0" />
             </button>
-
-            {isRanapSectionOpen && (
-              <div className="px-3 pb-3 space-y-3">
-                {RANAP_CATEGORY_ORDER.map((category) => {
-                  const items = groupedRanap[category];
-                  return (
-                    <div key={category} className="bg-white rounded-xl border border-rose-100 overflow-hidden">
-                      <div className="flex items-center justify-between px-2.5 py-1.5 bg-rose-100/60 border-b border-rose-100">
-                        <span className="text-[10px] font-black text-rose-900 uppercase tracking-wide">
-                          {RANAP_CATEGORY_LABELS[category]} ({items.length})
-                        </span>
-                        {onOpenAddRanapPatient && (
-                          <button
-                            onClick={() => handleActionClick(() => onOpenAddRanapPatient(category))}
-                            className="p-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
-                            title={`Tambah pasien ${RANAP_CATEGORY_LABELS[category]}`}
-                          >
-                            <Plus className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
-
-                      {items.length === 0 ? (
-                        <p className="text-[11px] text-slate-400 italic text-center py-2.5">
-                          Tidak ada pasien ranap
-                        </p>
-                      ) : (
-                        <div className="divide-y divide-rose-50">
-                          {items.map((item) => (
-                            <div key={item.id} className="p-2 flex items-start gap-2 group">
-                              <button
-                                onClick={() => onCompleteRanapPatient?.(item.id)}
-                                className="mt-0.5 text-rose-300 hover:text-emerald-600 cursor-pointer shrink-0 transition-colors"
-                                title="Tandai selesai dikerjakan"
-                              >
-                                <Circle className="w-4 h-4" />
-                              </button>
-                              <div className="min-w-0 flex-1">
-                                <p className="text-[11px] font-bold text-slate-900 truncate">
-                                  {item.patientName}
-                                </p>
-                                <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-medium flex-wrap">
-                                  <span className="font-mono">RM: {item.medicalRecordNo}</span>
-                                  <span className="inline-flex items-center gap-0.5 bg-rose-50 text-rose-800 px-1 py-0.1 rounded font-bold">
-                                    <DoorOpen className="w-2.5 h-2.5" /> {item.roomNumber}
-                                  </span>
-                                </div>
-                                {item.diagnosis && (
-                                  <p className="text-[10px] text-slate-500 truncate mt-0.5">
-                                    {item.diagnosis}
-                                  </p>
-                                )}
-                              </div>
-                              {onDeleteRanapPatient && (
-                                confirmDeleteRanapId === item.id ? (
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    <button
-                                      onClick={() => { onDeleteRanapPatient(item.id); setConfirmDeleteRanapId(null); }}
-                                      className="text-[9px] font-black text-white bg-rose-600 hover:bg-rose-700 px-1.5 py-0.5 rounded cursor-pointer"
-                                    >
-                                      Hapus
-                                    </button>
-                                    <button
-                                      onClick={() => setConfirmDeleteRanapId(null)}
-                                      className="text-[9px] font-bold text-slate-500 hover:text-slate-700 px-1 cursor-pointer"
-                                    >
-                                      Batal
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    onClick={() => setConfirmDeleteRanapId(item.id)}
-                                    className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-rose-600 cursor-pointer shrink-0 transition-all"
-                                    title="Hapus dari antrean"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                )
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          )}
 
           <p className="text-[11px] font-black text-slate-500 uppercase tracking-wider px-1 pt-1 flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-teal-600"></span>

@@ -8,6 +8,7 @@ import { Header } from './components/Header';
 import { QueueBoxCard } from './components/QueueBoxCard';
 import { AddPatientModal } from './components/AddPatientModal';
 import { AddBoxModal } from './components/AddBoxModal';
+import { RanapQueueModal } from './components/RanapQueueModal';
 import { AddRanapPatientModal } from './components/AddRanapPatientModal';
 import { RanapHistoryModal } from './components/RanapHistoryModal';
 import { EditBoxModal } from './components/EditBoxModal';
@@ -2170,13 +2171,7 @@ export default function App() {
         avgWaitMinutes={globalResponseAnalytics.avgWaitMinutes}
         overloadCount={overloadedTherapistsCount}
         ranapQueue={ranapQueue}
-        onOpenAddRanapPatient={(category) => {
-          setAddRanapCategory(category);
-          setIsAddRanapPatientOpen(true);
-        }}
-        onCompleteRanapPatient={handleCompleteRanapPatient}
-        onDeleteRanapPatient={handleDeleteRanapPatient}
-        onOpenRanapHistory={() => setIsRanapHistoryOpen(true)}
+        onOpenRanapQueue={() => setIsRanapQueueOpen(true)}
       />
 
       {/* Top Header */}
@@ -2518,6 +2513,19 @@ export default function App() {
         isOpen={isAddBoxOpen}
         onClose={() => setIsAddBoxOpen(false)}
         onAddBox={handleAddBox}
+      />
+
+      <RanapQueueModal
+        isOpen={isRanapQueueOpen}
+        onClose={() => setIsRanapQueueOpen(false)}
+        ranapQueue={ranapQueue}
+        onOpenAddPatient={(category) => {
+          setAddRanapCategory(category);
+          setIsAddRanapPatientOpen(true);
+        }}
+        onCompletePatient={handleCompleteRanapPatient}
+        onDeletePatient={handleDeleteRanapPatient}
+        onOpenHistory={() => setIsRanapHistoryOpen(true)}
       />
 
       <AddRanapPatientModal
