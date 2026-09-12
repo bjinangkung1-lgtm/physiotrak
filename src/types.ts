@@ -209,6 +209,11 @@ export interface QueueBox {
   hasUnreadNewInput?: boolean;
   order?: number; // Explicit visual sequence order index
   createdAt: string;
+  // Watermark stamped whenever CONTENT fields (color, title, image, dll) change,
+  // so a stale full-state broadcast from another device can never silently
+  // overwrite a newer edit made elsewhere - see mergeBoxesByRecency in App.tsx
+  // and the matching recency check in server.ts reconcileQueueStates.
+  contentUpdatedAt?: string;
 }
 
 export interface AppNotification {

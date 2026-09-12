@@ -1880,6 +1880,24 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   const mergedRanapQueue = Array.from(ranapMap.values());
 
   // 2. Reconcile Boxes
+  // Recency-wins helper for box CONTENT fields (color, title, image, dll):
+  // tanpa ini, siapa pun yang broadcast full-state-nya sampai ke server
+  // PALING TERAKHIR akan menang untuk semua field, walau isinya lebih basi
+  // (mis. perangkat lain yang belum menerima perubahan warna terbaru lalu
+  // ikut menyiarkan ulang warna lama). Dengan watermark `contentUpdatedAt`
+  // per kotak, box yang timestamp-nya lebih baru yang menang untuk konten,
+  // sementara posisi/urutan tetap diatur terpisah oleh boxOrderUpdatedAt.
+  const pickBoxContentBase = (existing: any, inB: any) => {
+    const existingContentTime = existing.contentUpdatedAt ? new Date(existing.contentUpdatedAt).getTime() : 0;
+    const incomingContentTime = inB.contentUpdatedAt ? new Date(inB.contentUpdatedAt).getTime() : 0;
+    const existingIsNewer = existingContentTime > incomingContentTime;
+    return {
+      base: existingIsNewer ? existing : inB,
+      other: existingIsNewer ? inB : existing,
+      contentUpdatedAt: existingIsNewer ? existing.contentUpdatedAt : (inB.contentUpdatedAt || existing.contentUpdatedAt)
+    };
+  };
+
   const existingBoxes: any[] = Array.isArray(existingState.boxes) ? existingState.boxes : [];
   const incomingBoxes: any[] = Array.isArray(incomingPayload.boxes) ? incomingPayload.boxes : [];
   const deletedBoxIds = new Set(Array.isArray(incomingPayload.deletedBoxIds) ? incomingPayload.deletedBoxIds : []);
@@ -1920,21 +1938,24 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       seenIds.add(inB.id);
       const existing = existingBoxMap.get(inB.id);
       if (existing) {
-        // Preserve instructionImageUrls if incoming did not supply them or passed undefined
-        let finalImageUrls = inB.instructionImageUrls;
-        if (finalImageUrls === undefined && existing.instructionImageUrls) {
-          finalImageUrls = existing.instructionImageUrls;
+        const { base: contentBase, other: contentOther, contentUpdatedAt } = pickBoxContentBase(existing, inB);
+
+        // Preserve instructionImageUrls if the winning content version did not supply them
+        let finalImageUrls = contentBase.instructionImageUrls;
+        if (finalImageUrls === undefined && contentOther.instructionImageUrls) {
+          finalImageUrls = contentOther.instructionImageUrls;
         }
 
         mergedBoxes.push(sanitizeServerBox({
-          ...existing,
-          ...inB,
+          ...contentOther,
+          ...contentBase,
           instructionImageUrls: finalImageUrls,
           instructionImageUrl: (Array.isArray(finalImageUrls) && finalImageUrls.length > 0)
             ? finalImageUrls[0]
-            : (inB.instructionImageUrl || existing.instructionImageUrl || undefined),
+            : (contentBase.instructionImageUrl || contentOther.instructionImageUrl || undefined),
           order: typeof inB.order === 'number' ? inB.order : idx,
-          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput
+          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput,
+          contentUpdatedAt
         }));
       } else {
         mergedBoxes.push(sanitizeServerBox({
@@ -1969,20 +1990,23 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
 
       const inB = incomingBoxMap.get(existing.id);
       if (inB) {
-        let finalImageUrls = inB.instructionImageUrls;
-        if (finalImageUrls === undefined && existing.instructionImageUrls) {
-          finalImageUrls = existing.instructionImageUrls;
+        const { base: contentBase, other: contentOther, contentUpdatedAt } = pickBoxContentBase(existing, inB);
+
+        let finalImageUrls = contentBase.instructionImageUrls;
+        if (finalImageUrls === undefined && contentOther.instructionImageUrls) {
+          finalImageUrls = contentOther.instructionImageUrls;
         }
 
         mergedBoxes.push(sanitizeServerBox({
-          ...existing,
-          ...inB,
+          ...contentOther,
+          ...contentBase,
           instructionImageUrls: finalImageUrls,
           instructionImageUrl: (Array.isArray(finalImageUrls) && finalImageUrls.length > 0)
             ? finalImageUrls[0]
-            : (inB.instructionImageUrl || existing.instructionImageUrl || undefined),
+            : (contentBase.instructionImageUrl || contentOther.instructionImageUrl || undefined),
           order: typeof existing.order === 'number' ? existing.order : idx,
-          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput
+          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput,
+          contentUpdatedAt
         }));
       } else {
         mergedBoxes.push(sanitizeServerBox({

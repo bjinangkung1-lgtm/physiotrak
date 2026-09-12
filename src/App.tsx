@@ -182,6 +182,40 @@ export const normalizeAndMergeBoxes = (rawList: any[]): QueueBox[] => {
   }));
 };
 
+// Merge an incoming box list with the current local one WITHOUT letting a
+// stale broadcast overwrite a newer local edit (e.g. warna kotak yang baru
+// saja diganti balik sendiri karena ada perangkat lain yang menyiarkan ulang
+// state kotak versi lama). Setiap kotak dibandingkan per-id berdasarkan
+// `contentUpdatedAt`: pemilik timestamp lebih baru yang menang untuk field
+// KONTEN (warna, judul, gambar, dll), sedangkan posisi/urutan & badge tetap
+// mengikuti data yang baru masuk karena itu sudah diselesaikan otomatis oleh
+// server (lihat boxOrderUpdatedAt).
+export const mergeBoxesByRecency = (currentBoxes: QueueBox[], incomingRaw: any[]): QueueBox[] => {
+  const normalizedIncoming = normalizeAndMergeBoxes(incomingRaw);
+  const currentMap = new Map(currentBoxes.map(b => [b.id, b]));
+
+  return normalizedIncoming.map(inB => {
+    const cur = currentMap.get(inB.id);
+    if (!cur) return inB;
+
+    const curTime = cur.contentUpdatedAt ? new Date(cur.contentUpdatedAt).getTime() : 0;
+    const inTime = inB.contentUpdatedAt ? new Date(inB.contentUpdatedAt).getTime() : 0;
+
+    if (curTime > inTime) {
+      // Local content is strictly newer than what just arrived - keep it,
+      // but still adopt incoming's position/badge fields since those are
+      // server-resolved and safe to follow.
+      return {
+        ...cur,
+        order: inB.order,
+        isPinned: inB.isPinned,
+        hasUnreadNewInput: inB.hasUnreadNewInput
+      };
+    }
+    return inB;
+  });
+};
+
 // Safe collision-proof ID generator across 30+ simultaneous hospital devices
 function generateUniqueId(prefix: string = 'id'): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -686,8 +720,10 @@ export default function App() {
       }
 
       if (syncData.boxes && Array.isArray(syncData.boxes) && syncData.boxes.length > 0) {
-        const completeBoxes = normalizeAndMergeBoxes(syncData.boxes);
-        setBoxes(prev => JSON.stringify(prev) === JSON.stringify(completeBoxes) ? prev : completeBoxes);
+        setBoxes(prev => {
+          const merged = mergeBoxesByRecency(prev, syncData.boxes!);
+          return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
+        });
       }
 
       if (syncData.patients && Array.isArray(syncData.patients)) {
@@ -859,7 +895,7 @@ export default function App() {
         });
       }
       if (Array.isArray(cloudState.boxes) && cloudState.boxes.length > 0) {
-        setBoxes(normalizeAndMergeBoxes(cloudState.boxes));
+        setBoxes(prev => mergeBoxesByRecency(prev, cloudState.boxes));
       }
       if (Array.isArray(cloudState.callLogs) && cloudState.callLogs.length > 0) {
         setCallLogs(prev => {
@@ -976,8 +1012,7 @@ export default function App() {
           }
 
           if (Array.isArray(data.state.boxes) && data.state.boxes.length > 0) {
-            const normalized = normalizeAndMergeBoxes(data.state.boxes);
-            setBoxes(normalized);
+            setBoxes(prev => mergeBoxesByRecency(prev, data.state.boxes));
           }
 
           if (validServerPatients.length > 0) {
@@ -1046,7 +1081,8 @@ export default function App() {
 
   const handleUpdateBox = (updatedBox: QueueBox) => {
     hasLocalMutationRef.current = true;
-    setBoxes(prev => prev.map(b => b.id === updatedBox.id ? updatedBox : b));
+    const stamped = { ...updatedBox, contentUpdatedAt: new Date().toISOString() };
+    setBoxes(prev => prev.map(b => b.id === stamped.id ? stamped : b));
   };
 
   // ==================== ANTREAN RANAP (SIDEBAR) ====================
@@ -1561,11 +1597,13 @@ export default function App() {
   const handleAddBox = (boxData: Omit<QueueBox, 'id' | 'createdAt'>) => {
     hasLocalMutationRef.current = true;
     const determinedCategory = boxData.category || getTherapistCategory(boxData.officerName, boxData.location) || 'fisio';
+    const nowIso = new Date().toISOString();
     const newBox: QueueBox = {
       ...boxData,
       category: determinedCategory,
       id: generateUniqueId('box'),
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      contentUpdatedAt: nowIso,
     };
     setBoxes(prev => [...prev, newBox]);
     showAppToast(`Kotak antrean "${newBox.title}" berhasil ditambahkan.`);
@@ -1580,16 +1618,19 @@ export default function App() {
   // Update Box Color Theme
   const handleUpdateBoxColor = (boxId: string, color: BoxColor) => {
     hasLocalMutationRef.current = true;
-    setBoxes(prev => prev.map(b => b.id === boxId ? { ...b, color } : b));
+    const stampedAt = new Date().toISOString();
+    setBoxes(prev => prev.map(b => b.id === boxId ? { ...b, color, contentUpdatedAt: stampedAt } : b));
   };
 
   // Update Box Instruction Image
   const handleUpdateBoxImage = (boxId: string, imageUrl: string) => {
     hasLocalMutationRef.current = true;
+    const stampedAt = new Date().toISOString();
     setBoxes(prev => prev.map(b => b.id === boxId ? {
       ...b,
       instructionImageUrl: imageUrl || undefined,
-      instructionImageUrls: imageUrl ? [imageUrl] : []
+      instructionImageUrls: imageUrl ? [imageUrl] : [],
+      contentUpdatedAt: stampedAt
     } : b));
   };
 
@@ -1597,10 +1638,12 @@ export default function App() {
   const handleUpdateBoxImages = (boxId: string, imageUrls: string[]) => {
     hasLocalMutationRef.current = true;
     const cleanUrls = imageUrls.filter(u => typeof u === 'string' && u.trim().length > 0);
+    const stampedAt = new Date().toISOString();
     setBoxes(prev => prev.map(b => b.id === boxId ? {
       ...b,
       instructionImageUrls: cleanUrls,
-      instructionImageUrl: cleanUrls[0] || undefined
+      instructionImageUrl: cleanUrls[0] || undefined,
+      contentUpdatedAt: stampedAt
     } : b));
   };
 
