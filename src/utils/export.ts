@@ -411,8 +411,6 @@ export function exportTherapistDailyPDF(data: TherapistDailyLogbookData, filenam
   let compliantCount = 0;
   let countWithWait = 0;
 
-  // Respon time (input -> diceklis) hanya dihitung dari pasien yang sudah
-  // selesai; pasien yang masih antre belum punya durasi respon final.
   data.patients.filter(p => p.completed).forEach(p => {
     const metrics = calculatePatientTimeMetrics(p, data.boxes);
     totalWait += metrics.responseTimeMinutes;
@@ -545,8 +543,6 @@ export function exportTherapistDailyExcel(data: TherapistDailyLogbookData, filen
   let compliantCount = 0;
   let countWithWait = 0;
 
-  // Respon time (input -> diceklis) hanya dihitung dari pasien yang sudah
-  // selesai; pasien yang masih antre belum punya durasi respon final.
   data.patients.filter(p => p.completed).forEach(p => {
     const metrics = calculatePatientTimeMetrics(p, data.boxes);
     totalWait += metrics.responseTimeMinutes;

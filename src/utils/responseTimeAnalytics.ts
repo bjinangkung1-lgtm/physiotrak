@@ -1,11 +1,6 @@
 import { PatientItem, QueueBox } from '../types';
 import { getServiceStartTimestampWIB } from './dateHelper';
 
-// Pelayanan IRM baru mulai memanggil pasien jam 08:00 WIB. Petugas kadang
-// sudah menginput/menulis pasien lebih awal (mis. jam 07:00) sebelum jam
-// buka, jadi jam mulai hitung respon time TIDAK BOLEH lebih awal dari jam
-// buka ini - kalau tidak, pasien yang diinput pagi-pagi sebelum buka akan
-// tercatat "menunggu"/"telat direspon" padahal pelayanannya belum dimulai.
 const SERVICE_START_HOUR_WIB = 8;
 
 export interface PatientTimeMetrics {
@@ -94,10 +89,6 @@ export function calculatePatientTimeMetrics(
 ): PatientTimeMetrics {
   const registeredAt = new Date(patient.createdAt);
   const regTime = registeredAt.getTime();
-  // Jam mulai hitung respon time: waktu input asli, TAPI tidak boleh lebih
-  // awal dari jam buka layanan (08:00 WIB) di tanggal yang sama. Jam input
-  // asli (registeredAt/regTime) tetap dipakai apa adanya untuk ditampilkan
-  // di kolom "Jam Masuk Input" - yang di-clamp hanya titik awal durasinya.
   const effectiveStartTime = !isNaN(regTime)
     ? Math.max(regTime, getServiceStartTimestampWIB(registeredAt, SERVICE_START_HOUR_WIB))
     : regTime;
@@ -105,18 +96,17 @@ export function calculatePatientTimeMetrics(
   const completedAt = patient.completedAt ? new Date(patient.completedAt) : undefined;
 
   const parentBox = boxes.find(b => b.id === patient.boxId);
-  const boxTitle = parentBox
-    ? parentBox.title.split('(')[0].trim()
+  const boxTitle = parentBox 
+    ? parentBox.title.split('(')[0].trim() 
     : ((patient as any).boxTitle ? String((patient as any).boxTitle).split('(')[0].trim() : 'Kotak');
-  const officerName = parentBox
-    ? parentBox.officerName
+  const officerName = parentBox 
+    ? parentBox.officerName 
     : ((patient as any).officerName || 'Petugas');
 
   let responseTimeMinutes = 0;
 
   if (patient.completed && completedAt && !isNaN(completedAt.getTime()) && !isNaN(effectiveStartTime)) {
-    // Respon time dihitung dari saat didaftarkan / ditulis (atau jam buka
-    // layanan, mana yang lebih akhir) hingga saat diceklis
+    // Respon time dihitung dari saat didaftarkan / ditulis hingga saat diceklis (dimulai paling awal dari jam buka 08:00 WIB)
     responseTimeMinutes = Math.max(0, Math.round((completedAt.getTime() - effectiveStartTime) / 60000));
   } else if (patient.completed) {
     // Selesai tapi tidak ada timestamp completedAt spesifik
@@ -127,8 +117,7 @@ export function calculatePatientTimeMetrics(
       responseTimeMinutes = Math.max(0, elapsedMinutes);
     }
   } else {
-    // Pasien masih antre / berjalan -> Waktu respon dihitung dari pendaftaran
-    // (atau jam buka layanan) hingga saat ini
+    // Pasien masih antre / berjalan -> Waktu respon dihitung dari pendaftaran hingga saat ini (dimulai paling awal dari jam buka 08:00 WIB)
     const isToday = !isNaN(regTime) && new Date().toDateString() === registeredAt.toDateString();
     const elapsedMinutes = !isNaN(effectiveStartTime) ? Math.round((now - effectiveStartTime) / 60000) : 15;
     if (!isToday && elapsedMinutes > 180) {
@@ -197,23 +186,18 @@ export function computeResponseTimeAnalytics(
   const activePatientsCount = patientMetrics.filter(p => !p.completed).length;
   const completedPatientsCount = patientMetrics.filter(p => p.completed).length;
 
-  // Respon Time (Daftar/Input -> Diceklis) hanya boleh dihitung dari pasien yang
-  // SUDAH diceklis selesai. Pasien yang masih aktif/berjalan belum punya waktu
-  // respon final - responseTimeMinutes mereka cuma jam berjalan (elapsed sejak
-  // input), bukan durasi input->ceklis yang sesungguhnya. Kalau dicampur ke
-  // rata-rata/distribusi/kepatuhan SPM, angkanya jadi bias dan berubah-ubah
-  // hanya karena waktu terus berjalan, padahal pasien itu belum selesai dilayani.
   const completedMetrics = patientMetrics.filter(p => p.completed);
 
+  // Calculate Averages - Respon Time (Daftar -> Ceklis) hanya untuk pasien yang sudah selesai
   const allResponseMinutes = completedMetrics.map(p => p.responseTimeMinutes);
-  const avgResponseMinutes = allResponseMinutes.length > 0
-    ? Math.round(allResponseMinutes.reduce((a, b) => a + b, 0) / allResponseMinutes.length)
+  const avgResponseMinutes = allResponseMinutes.length > 0 
+    ? Math.round(allResponseMinutes.reduce((a, b) => a + b, 0) / allResponseMinutes.length) 
     : 0;
 
   const avgWaitMinutes = avgResponseMinutes;
   const avgTotalMinutes = avgResponseMinutes;
 
-  // Distribution - hanya dari pasien yang sudah diceklis selesai
+  // Distribution (hanya pasien selesai)
   let fastCount = 0;
   let normalCount = 0;
   let moderateCount = 0;
@@ -226,13 +210,13 @@ export function computeResponseTimeAnalytics(
     else delayedCount++;
   });
 
-  const respondedCount = completedMetrics.length;
+  const totalCompleted = completedMetrics.length;
   const spmCompliantCount = fastCount + normalCount; // <= 30 min
-  const spmComplianceRate = respondedCount > 0 ? Math.round((spmCompliantCount / respondedCount) * 100) : 100;
-  const fastRate = respondedCount > 0 ? Math.round((fastCount / respondedCount) * 100) : 0;
-  const normalRate = respondedCount > 0 ? Math.round((normalCount / respondedCount) * 100) : 0;
-  const moderateRate = respondedCount > 0 ? Math.round((moderateCount / respondedCount) * 100) : 0;
-  const delayedRate = respondedCount > 0 ? Math.round((delayedCount / respondedCount) * 100) : 0;
+  const spmComplianceRate = totalCompleted > 0 ? Math.round((spmCompliantCount / totalCompleted) * 100) : 100;
+  const fastRate = totalCompleted > 0 ? Math.round((fastCount / totalCompleted) * 100) : 0;
+  const normalRate = totalCompleted > 0 ? Math.round((normalCount / totalCompleted) * 100) : 0;
+  const moderateRate = totalCompleted > 0 ? Math.round((moderateCount / totalCompleted) * 100) : 0;
+  const delayedRate = totalCompleted > 0 ? Math.round((delayedCount / totalCompleted) * 100) : 0;
 
   // Longest Waiting Active Patients (Top 6)
   const longestWaitingActive = patientMetrics
@@ -252,18 +236,17 @@ export function computeResponseTimeAnalytics(
       const activeBox = boxPatients.filter(p => !p.completed).length;
       const completedBox = boxPatients.filter(p => p.completed).length;
 
-      // Respon time per terapis: hanya dari pasien yang sudah diceklis selesai
-      // di kotak ini, sama seperti agregat keseluruhan di atas.
       const boxCompletedMetrics = boxPatients.filter(p => p.completed);
+
       const bRespList = boxCompletedMetrics.map(p => p.responseTimeMinutes);
       const bAvgResp = bRespList.length > 0 ? Math.round(bRespList.reduce((a, b) => a + b, 0) / bRespList.length) : 0;
 
       const bCompliant = boxCompletedMetrics.filter(p => p.responseTimeMinutes <= 30).length;
-      const bComplianceRate = boxCompletedMetrics.length > 0 ? Math.round((bCompliant / boxCompletedMetrics.length) * 100) : 100;
+      const bComplianceRate = completedBox > 0 ? Math.round((bCompliant / completedBox) * 100) : 100;
 
       const activeBoxPatients = boxPatients.filter(p => !p.completed);
-      const longestActiveWaitMinutes = activeBoxPatients.length > 0
-        ? Math.max(...activeBoxPatients.map(p => p.responseTimeMinutes))
+      const longestActiveWaitMinutes = activeBoxPatients.length > 0 
+        ? Math.max(...activeBoxPatients.map(p => p.responseTimeMinutes)) 
         : 0;
 
       const delayedCountBox = boxCompletedMetrics.filter(p => p.responseTimeMinutes > 45).length;

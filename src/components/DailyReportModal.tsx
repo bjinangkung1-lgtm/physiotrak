@@ -259,9 +259,6 @@ export const DailyReportModal: React.FC<DailyReportModalProps> = ({
       const actionCountMap: Record<string, number> = {};
 
       therapistPatients.forEach((p) => {
-        // Respon time (input -> diceklis) hanya dihitung dari pasien yang
-        // sudah selesai; pasien yang masih antre belum punya durasi respon
-        // final, jadi tidak boleh ikut menggeser rata-rata/kepatuhan SPM.
         if (p.completed) {
           const metrics = calculatePatientTimeMetrics(p, boxes);
           totalWait += metrics.responseTimeMinutes;

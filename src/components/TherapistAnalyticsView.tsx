@@ -253,11 +253,6 @@ export const TherapistAnalyticsView: React.FC<TherapistAnalyticsViewProps> = ({
       let countedResponse = 0;
       let spmCompliantCount = 0;
 
-      // Respon time (input -> diceklis) hanya valid untuk pasien yang SUDAH
-      // diceklis selesai. Pasien yang masih aktif/berjalan cuma punya jam
-      // berjalan (elapsed sejak input), bukan durasi respon final - kalau ikut
-      // dihitung, rata-rata & kepatuhan SPM per terapis jadi bias dan berubah
-      // terus meski belum ada satu pun pasien yang selesai dilayani.
       completed.forEach((p) => {
         const metrics = calculatePatientTimeMetrics(p, boxes);
         totalResponseMins += metrics.responseTimeMinutes;
@@ -339,9 +334,6 @@ export const TherapistAnalyticsView: React.FC<TherapistAnalyticsViewProps> = ({
       ? Math.round(validResponseStats.reduce((acc, s) => acc + s.avgResponseMinutes, 0) / validResponseStats.length)
       : 0;
 
-    // Kepatuhan SPM global juga hanya dari pasien yang sudah diceklis (completedCount),
-    // supaya sejalan dengan complianceRate per terapis yang sekarang dihitung dari
-    // pasien selesai saja - bukan dari totalCount yang masih mencampur pasien aktif.
     const totalTracked = stats.reduce((acc, s) => acc + s.completedCount, 0);
     const totalCompliant = stats.reduce((acc, s) => acc + Math.round((s.complianceRate / 100) * s.completedCount), 0);
     const globalSpmRate = totalTracked > 0 ? Math.round((totalCompliant / totalTracked) * 100) : 100;

@@ -777,35 +777,36 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
 
     if (existingIdx >= 0) {
       const current = masterPatients[existingIdx];
-      // Keep the master record's name in sync with the active queue entry.
-      // Without this, a typo fixed on the live queue (e.g. via "Edit Pasien")
-      // never reaches patients_master.json, so the corrected name gets
-      // silently overwritten by the stale one again the next time this
-      // patient is re-registered from the master/autocomplete list.
+      let fieldChanged = false;
+
+      // Update patientName if corrected in active queue
       if (cleanName && current.patientName !== cleanName) {
         current.patientName = cleanName;
-        masterUpdated = true;
+        fieldChanged = true;
       }
+
       // Update last visited date and increment if new visit day
       if (current.lastVisitDate !== today) {
         current.lastVisitDate = today;
         current.totalVisits = (current.totalVisits || 1) + 1;
-        masterUpdated = true;
+        fieldChanged = true;
       }
       if (p.diagnosis && !current.defaultDiagnosis) {
         current.defaultDiagnosis = p.diagnosis;
-        masterUpdated = true;
+        fieldChanged = true;
       }
       if (p.actionCode && !current.defaultActionCode) {
         current.defaultActionCode = p.actionCode;
-        masterUpdated = true;
+        fieldChanged = true;
       }
       if (p.phoneNumber && !current.phoneNumber) {
         current.phoneNumber = p.phoneNumber;
-        masterUpdated = true;
+        fieldChanged = true;
       }
-      if (masterUpdated) {
+
+      if (fieldChanged) {
         current.updatedAt = new Date().toISOString();
+        masterUpdated = true;
       }
     } else {
       // Auto-register new patient to master if not found
@@ -874,24 +875,13 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
   saveDailyArchive(dailyArchive);
 }
 
-// syncPatientsToMasterAndArchive does 2 extra JSON file read+writes (master
-// patients + daily archive, both unbounded and growing over the clinic's
-// lifetime) on top of the main queue_store.json write. Running it inline on
-// every single /api/queue POST (i.e. on every field edit, not just on
-// meaningful visit changes) adds latency to every device's realtime sync and
-// blocks the SSE broadcast to the other ~30 connected devices behind it.
-// Debounce it like the Firestore mirror below: coalesce a burst of rapid
-// edits (typing, toggling checkboxes, calling/completing patients) into a
-// single archive/master write shortly after things settle down, without
-// delaying the broadcastUpdate() that peers rely on to see the queue change.
+// Debounced master patient & daily archive synchronization helper
 let masterArchiveDebounceTimer: NodeJS.Timeout | null = null;
 let pendingMasterArchivePatients: any[] | null = null;
 
 function scheduleSyncPatientsToMasterAndArchive(patients: any[]) {
   pendingMasterArchivePatients = patients;
-  if (masterArchiveDebounceTimer) {
-    clearTimeout(masterArchiveDebounceTimer);
-  }
+  if (masterArchiveDebounceTimer) clearTimeout(masterArchiveDebounceTimer);
   masterArchiveDebounceTimer = setTimeout(() => {
     masterArchiveDebounceTimer = null;
     const toSync = pendingMasterArchivePatients;
@@ -1288,6 +1278,7 @@ function getInitialServerState() {
     notifications: [],
     currentCallingPatient: null,
     currentCallingBox: null,
+    boxOrderUpdatedAt: null,
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -1609,6 +1600,17 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   const incomingBoxes: any[] = Array.isArray(incomingPayload.boxes) ? incomingPayload.boxes : [];
   const deletedBoxIds = new Set(Array.isArray(incomingPayload.deletedBoxIds) ? incomingPayload.deletedBoxIds : []);
 
+  const existingOrderWatermark = existingState.boxOrderUpdatedAt
+    ? new Date(existingState.boxOrderUpdatedAt).getTime() : 0;
+  const incomingOrderWatermark = incomingPayload.boxOrderUpdatedAt
+    ? new Date(incomingPayload.boxOrderUpdatedAt).getTime() : 0;
+  const isExplicitReorder = incomingBoxes.length > 0
+    && incomingOrderWatermark > 0
+    && incomingOrderWatermark > existingOrderWatermark;
+  const effectiveBoxOrderUpdatedAt = isExplicitReorder
+    ? incomingPayload.boxOrderUpdatedAt
+    : (existingState.boxOrderUpdatedAt || null);
+
   const existingBoxMap = new Map<string, any>();
   for (const b of existingBoxes) {
     if (b && b.id && !deletedBoxIds.has(b.id)) {
@@ -1616,28 +1618,18 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
     }
   }
 
+  const incomingBoxMap = new Map<string, any>();
+  for (const b of incomingBoxes) {
+    if (b && b.id && !deletedBoxIds.has(b.id)) {
+      incomingBoxMap.set(b.id, { ...b });
+    }
+  }
+
   const mergedBoxes: any[] = [];
   const seenIds = new Set<string>();
 
-  // Almost every /api/queue POST carries the sender's ENTIRE `boxes` array,
-  // even ones triggered by something unrelated to reordering (calling a
-  // patient, ticking a checkbox, etc). If a device had the queue open since
-  // before someone else's drag-and-drop reorder, its next unrelated save
-  // resends its own stale (pre-reorder) box array - and used to silently
-  // win because whichever POST arrived last dictated the whole array's
-  // position, with no way to tell "fresh reorder" from "stale resend" apart.
-  // boxOrderUpdatedAt is a watermark stamped ONLY by actual reorder actions
-  // (drag, move-step, "Atur Piket" reorder) - only a payload whose watermark
-  // is strictly newer than what's already stored is treated as a real
-  // reorder; anything else keeps the server's existing box order and just
-  // merges per-box content (title, instruction, photos, etc.) by id.
-  const existingOrderWatermark = existingState.boxOrderUpdatedAt ? new Date(existingState.boxOrderUpdatedAt).getTime() : 0;
-  const incomingOrderWatermark = incomingPayload.boxOrderUpdatedAt ? new Date(incomingPayload.boxOrderUpdatedAt).getTime() : 0;
-  const isExplicitReorder = incomingBoxes.length > 0 && incomingOrderWatermark > 0 && incomingOrderWatermark > existingOrderWatermark;
-  const effectiveBoxOrderUpdatedAt = isExplicitReorder ? incomingPayload.boxOrderUpdatedAt : (existingState.boxOrderUpdatedAt || null);
-
   if (isExplicitReorder) {
-    // 1. Adopt incomingBoxes' explicit order as determined by this fresh drag-and-drop / reorder action
+    // 1. Maintain incomingBoxes explicit order as determined by user drag-and-drop or reorder actions
     for (let idx = 0; idx < incomingBoxes.length; idx++) {
       const inB = incomingBoxes[idx];
       if (!inB || !inB.id || deletedBoxIds.has(inB.id) || seenIds.has(inB.id)) continue;
@@ -1679,54 +1671,51 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       }
     }
   } else if (incomingBoxes.length > 0) {
-    // Not a fresher reorder: keep the server's current order, only merge
-    // per-box content from whichever incoming box matches by id, and append
-    // genuinely new incoming boxes (e.g. "Tambah Kotak") that don't exist yet.
-    const incomingBoxMap = new Map<string, any>();
-    for (const inB of incomingBoxes) {
-      if (inB && inB.id && !deletedBoxIds.has(inB.id)) {
-        incomingBoxMap.set(inB.id, inB);
-      }
-    }
+    // Preserves existing server order, only merges box contents by id
+    const sortedExisting = [...existingBoxes].sort((a, b) => {
+      const orderA = typeof a?.order === 'number' ? a.order : 9999;
+      const orderB = typeof b?.order === 'number' ? b.order : 9999;
+      return orderA - orderB;
+    });
 
-    const sortedExisting = existingBoxes
-      .filter(b => b && b.id && !deletedBoxIds.has(b.id))
-      .slice()
-      .sort((a, b) => (typeof a?.order === 'number' ? a.order : 9999) - (typeof b?.order === 'number' ? b.order : 9999));
+    for (let idx = 0; idx < sortedExisting.length; idx++) {
+      const existing = sortedExisting[idx];
+      if (!existing || !existing.id || deletedBoxIds.has(existing.id) || seenIds.has(existing.id)) continue;
+      seenIds.add(existing.id);
 
-    for (const b of sortedExisting) {
-      seenIds.add(b.id);
-      const inB = incomingBoxMap.get(b.id);
+      const inB = incomingBoxMap.get(existing.id);
       if (inB) {
         let finalImageUrls = inB.instructionImageUrls;
-        if (finalImageUrls === undefined && b.instructionImageUrls) {
-          finalImageUrls = b.instructionImageUrls;
+        if (finalImageUrls === undefined && existing.instructionImageUrls) {
+          finalImageUrls = existing.instructionImageUrls;
         }
+
         mergedBoxes.push(sanitizeServerBox({
-          ...b,
+          ...existing,
           ...inB,
           instructionImageUrls: finalImageUrls,
           instructionImageUrl: (Array.isArray(finalImageUrls) && finalImageUrls.length > 0)
             ? finalImageUrls[0]
-            : (inB.instructionImageUrl || b.instructionImageUrl || undefined),
-          order: typeof b.order === 'number' ? b.order : mergedBoxes.length,
-          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : b.hasUnreadNewInput
+            : (inB.instructionImageUrl || existing.instructionImageUrl || undefined),
+          order: typeof existing.order === 'number' ? existing.order : idx,
+          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput
         }));
       } else {
         mergedBoxes.push(sanitizeServerBox({
-          ...b,
-          order: typeof b.order === 'number' ? b.order : mergedBoxes.length
+          ...existing,
+          order: typeof existing.order === 'number' ? existing.order : idx
         }));
       }
     }
 
-    // Append genuinely new boxes present in incoming but not existing yet
-    for (const inB of incomingBoxes) {
+    // Append newly created boxes from incoming that are not yet in existingBoxes
+    for (let idx = 0; idx < incomingBoxes.length; idx++) {
+      const inB = incomingBoxes[idx];
       if (inB && inB.id && !deletedBoxIds.has(inB.id) && !seenIds.has(inB.id)) {
         seenIds.add(inB.id);
         mergedBoxes.push(sanitizeServerBox({
           ...inB,
-          order: mergedBoxes.length
+          order: typeof inB.order === 'number' ? inB.order : mergedBoxes.length
         }));
       }
     }
@@ -1857,9 +1846,6 @@ app.post('/api/queue', async (req, res) => {
 
       saveStateToFile(mergedState);
 
-      // Broadcast to peers immediately so other devices see the queue change
-      // as fast as possible; the master-patient/daily-archive bookkeeping
-      // below is not needed for the live queue view and is deferred instead.
       broadcastUpdate({ type: 'SYNC_STATE', state: mergedState, senderDeviceId });
       console.log(`[QueueSync] Synced from device ${senderDeviceId || 'unknown'}: ${mergedState.patients.length} patients, ${mergedState.boxes.length} boxes.`);
 
@@ -1894,6 +1880,7 @@ app.post('/api/queue/reset', async (req, res) => {
         isExplicitReset: true,
         resetConfirmed: true,
         lastResetAt: resetTime,
+        boxOrderUpdatedAt: existingState.boxOrderUpdatedAt || null,
         deletedPatientIds: [],
         lastUpdated: new Date().toISOString(),
       };

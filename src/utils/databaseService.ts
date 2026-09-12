@@ -147,10 +147,6 @@ export const verifyDatabasePasswordAsync = async (inputPassword: string): Promis
   return clean === getDatabasePassword().trim();
 };
 
-// Picks the more recently-updated of two MasterPatient records so identity
-// fields (like patientName) are resolved by actual recency instead of by
-// which data source happens to be merged last. Falls back to lastVisitDate /
-// createdAt for records saved before `updatedAt` existed.
 const pickMoreRecentPatient = (a?: MasterPatient, b?: MasterPatient): MasterPatient | undefined => {
   if (!a) return b;
   if (!b) return a;
@@ -205,6 +201,7 @@ export const databaseService = {
         if (!existing) {
           patientMap.set(key, { ...p });
         } else {
+          const newer = pickMoreRecentPatient(existing, p);
           // Merge prioritizing richer data
           const mergedPhotos = [
             ...(Array.isArray(existing.instructionPhotos) ? existing.instructionPhotos : []),
@@ -217,18 +214,13 @@ export const databaseService = {
             ...(existing.instructionImageUrl ? [existing.instructionImageUrl] : []),
             ...(p.instructionImageUrl ? [p.instructionImageUrl] : [])
           ]));
-          // Resolve identity fields (patientName, medicalRecordNo) by actual
-          // recency rather than by source priority - otherwise whichever of
-          // server/local/cloud happens to be merged last always wins, even
-          // when it is the stale copy that hasn't seen a recent name fix.
-          const newer = pickMoreRecentPatient(existing, p)!;
 
           patientMap.set(key, {
             ...existing,
             ...p,
-            patientName: newer.patientName || existing.patientName || p.patientName,
-            medicalRecordNo: newer.medicalRecordNo || existing.medicalRecordNo || p.medicalRecordNo,
-            updatedAt: newer.updatedAt || p.updatedAt || existing.updatedAt,
+            patientName: newer?.patientName || existing.patientName || p.patientName,
+            medicalRecordNo: newer?.medicalRecordNo || existing.medicalRecordNo || p.medicalRecordNo,
+            updatedAt: newer?.updatedAt || p.updatedAt || existing.updatedAt,
             totalVisits: Math.max(existing.totalVisits || 1, p.totalVisits || 1),
             firstOfficerName: existing.firstOfficerName || p.firstOfficerName,
             firstBoxId: existing.firstBoxId || p.firstBoxId,
@@ -266,6 +258,7 @@ export const databaseService = {
         if (!existing) {
           patientMap.set(key, { ...p });
         } else {
+          const newer = pickMoreRecentPatient(existing, p);
           const mergedPhotos = [
             ...(Array.isArray(existing.instructionPhotos) ? existing.instructionPhotos : []),
             ...(Array.isArray(p.instructionPhotos) ? p.instructionPhotos : [])
@@ -277,14 +270,13 @@ export const databaseService = {
             ...(existing.instructionImageUrl ? [existing.instructionImageUrl] : []),
             ...(p.instructionImageUrl ? [p.instructionImageUrl] : [])
           ]));
-          const newer = pickMoreRecentPatient(existing, p)!;
 
           patientMap.set(key, {
             ...existing,
             ...p,
-            patientName: newer.patientName || existing.patientName || p.patientName,
-            medicalRecordNo: newer.medicalRecordNo || existing.medicalRecordNo || p.medicalRecordNo,
-            updatedAt: newer.updatedAt || p.updatedAt || existing.updatedAt,
+            patientName: newer?.patientName || existing.patientName || p.patientName,
+            medicalRecordNo: newer?.medicalRecordNo || existing.medicalRecordNo || p.medicalRecordNo,
+            updatedAt: newer?.updatedAt || p.updatedAt || existing.updatedAt,
             totalVisits: Math.max(existing.totalVisits || 1, p.totalVisits || 1),
             firstOfficerName: existing.firstOfficerName || p.firstOfficerName,
             firstBoxId: existing.firstBoxId || p.firstBoxId,

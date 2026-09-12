@@ -35,7 +35,8 @@ import {
   CheckCircle2,
   UserX,
   Camera,
-  User
+  User,
+  Stethoscope
 } from 'lucide-react';
 import { QueueBox, PatientItem, BoxColor } from '../types';
 import { uploadImageToServer, getBoxImageUrls, saveBoxImagesToServer, getPatientImageUrls } from '../utils/imageUtils';
@@ -1269,6 +1270,22 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                             }
                           }}
                         />
+
+                        {/* Diagnosis / ICF WHO Badge */}
+                        {patient.diagnosis && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startEditPatient(patient);
+                            }}
+                            className="px-1.5 py-0.5 bg-teal-50 hover:bg-teal-100 text-teal-850 border border-teal-200/90 rounded-md text-[9px] font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs max-w-[160px] sm:max-w-[220px]"
+                            title={`Diagnosa ICF WHO: ${patient.diagnosis} (Klik untuk edit / ubah)`}
+                          >
+                            <Stethoscope className="w-2.5 h-2.5 text-teal-600 shrink-0" />
+                            <span className="truncate">{patient.diagnosis}</span>
+                          </button>
+                        )}
 
                         {patient.isReady === false && (
                           <span 

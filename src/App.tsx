@@ -395,6 +395,31 @@ export default function App() {
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(true);
   const knownPatientIdsRef = React.useRef<Set<string>>(new Set());
 
+  // Watermark ref for explicit box reordering (prevents stale devices from reverting box order)
+  const boxOrderUpdatedAtRef = React.useRef<string | null>(
+    typeof window !== 'undefined' ? localStorage.getItem('antrian_box_order_updated_at') : null
+  );
+
+  const stampBoxOrderUpdated = () => {
+    const ts = new Date().toISOString();
+    boxOrderUpdatedAtRef.current = ts;
+    try {
+      localStorage.setItem('antrian_box_order_updated_at', ts);
+    } catch {}
+  };
+
+  const updateBoxOrderWatermarkIfNewer = (incomingWatermark?: string | null) => {
+    if (!incomingWatermark) return;
+    const incomingTs = new Date(incomingWatermark).getTime();
+    const currentTs = boxOrderUpdatedAtRef.current ? new Date(boxOrderUpdatedAtRef.current).getTime() : 0;
+    if (!isNaN(incomingTs) && incomingTs > currentTs) {
+      boxOrderUpdatedAtRef.current = incomingWatermark;
+      try {
+        localStorage.setItem('antrian_box_order_updated_at', incomingWatermark);
+      } catch {}
+    }
+  };
+
   // Drag-and-Drop & Reorder state
   const [draggedBoxId, setDraggedBoxId] = useState<string | null>(null);
   const [dragOverBoxId, setDragOverBoxId] = useState<string | null>(null);
@@ -422,6 +447,7 @@ export default function App() {
       return;
     }
 
+    stampBoxOrderUpdated();
     setBoxes(prev => {
       const sourceBox = prev.find(b => b.id === draggedBoxId);
       const targetBox = prev.find(b => b.id === targetBoxId);
@@ -453,7 +479,6 @@ export default function App() {
       return reordered;
     });
 
-    stampBoxOrderUpdated();
     hasLocalMutationRef.current = true;
     setDraggedBoxId(null);
     setDragOverBoxId(null);
@@ -461,6 +486,7 @@ export default function App() {
   };
 
   const handleMoveBoxStep = (boxId: string, direction: 'left' | 'right' | 'first' | 'last') => {
+    stampBoxOrderUpdated();
     setBoxes(prev => {
       const targetBox = prev.find(b => b.id === boxId);
       if (!targetBox) return prev;
@@ -500,14 +526,13 @@ export default function App() {
       return reordered;
     });
 
-    stampBoxOrderUpdated();
     hasLocalMutationRef.current = true;
     showAppToast('Urutan posisi kotak berhasil diperbarui.');
   };
 
   const handleReorderBoxes = (newBoxes: QueueBox[]) => {
-    setBoxes(newBoxes);
     stampBoxOrderUpdated();
+    setBoxes(newBoxes);
     hasLocalMutationRef.current = true;
     try {
       localStorage.setItem('antrian_boxes', JSON.stringify(newBoxes));
@@ -557,24 +582,7 @@ export default function App() {
   const lastAnnouncedCallRef = React.useRef<string | null>(null);
   const deletedPatientIdsRef = React.useRef<string[]>([]);
   const deletedBoxIdsRef = React.useRef<string[]>([]);
-  const broadcastDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Watermark stamped only by an actual reorder action (drag, geser posisi,
-  // "Atur Piket"), sent with every broadcast so the server can tell a fresh
-  // reorder apart from another device merely resending its stale in-memory
-  // box order for an unrelated change. See reconcileQueueStates in server.ts.
-  const boxOrderUpdatedAtRef = React.useRef<string | null>(
-    typeof window !== 'undefined' ? localStorage.getItem('antrian_box_order_updated_at') : null
-  );
-
-  const stampBoxOrderUpdated = () => {
-    const ts = new Date().toISOString();
-    boxOrderUpdatedAtRef.current = ts;
-    try {
-      localStorage.setItem('antrian_box_order_updated_at', ts);
-    } catch {
-      // ignore
-    }
-  };
+  const broadcastDebounceTimerRef = React.useRef<NodeJS.Timeout | null>(null);
 
   // Check URL query parameters on startup (e.g. ?mode=tv)
   useEffect(() => {
@@ -597,24 +605,12 @@ export default function App() {
     const unsubscribeData = realtimeSync.subscribe((syncData) => {
       if (!syncData || !isMounted) return;
 
+      if (syncData.boxOrderUpdatedAt) {
+        updateBoxOrderWatermarkIfNewer(syncData.boxOrderUpdatedAt);
+      }
+
       isRemoteSyncRef.current = true;
       isHydratedRef.current = true;
-
-      // Keep the local box-order watermark in sync with whatever the server
-      // already knows, so this device doesn't send a stale/older watermark
-      // than what another device's reorder already established.
-      if (syncData.boxOrderUpdatedAt) {
-        const incomingWatermark = new Date(syncData.boxOrderUpdatedAt).getTime();
-        const currentWatermark = boxOrderUpdatedAtRef.current ? new Date(boxOrderUpdatedAtRef.current).getTime() : 0;
-        if (!isNaN(incomingWatermark) && incomingWatermark > currentWatermark) {
-          boxOrderUpdatedAtRef.current = syncData.boxOrderUpdatedAt;
-          try {
-            localStorage.setItem('antrian_box_order_updated_at', syncData.boxOrderUpdatedAt);
-          } catch {
-            // ignore
-          }
-        }
-      }
 
       // Handle Explicit Reset across all devices
       const isResetEvent = Boolean(
@@ -767,6 +763,10 @@ export default function App() {
         }
       }
 
+      if (cloudState.boxOrderUpdatedAt) {
+        updateBoxOrderWatermarkIfNewer(cloudState.boxOrderUpdatedAt);
+      }
+
       const cloudResetEpoch = cloudState.lastResetAt ? new Date(cloudState.lastResetAt).getTime() : 0;
       const validCloudPatients = (cloudState.patients || []).filter(p => {
         if (!p || !p.id) return false;
@@ -837,6 +837,7 @@ export default function App() {
             callLogs: cloudState.callLogs || [],
             notifications: cloudState.notifications || [],
             lastResetAt: cloudState.lastResetAt || null,
+            boxOrderUpdatedAt: boxOrderUpdatedAtRef.current || undefined,
             isExplicitReset: false,
             resetConfirmed: false,
           }),
@@ -864,16 +865,7 @@ export default function App() {
           isHydratedRef.current = true;
 
           if (data.state.boxOrderUpdatedAt) {
-            const incomingWatermark = new Date(data.state.boxOrderUpdatedAt).getTime();
-            const currentWatermark = boxOrderUpdatedAtRef.current ? new Date(boxOrderUpdatedAtRef.current).getTime() : 0;
-            if (!isNaN(incomingWatermark) && incomingWatermark > currentWatermark) {
-              boxOrderUpdatedAtRef.current = data.state.boxOrderUpdatedAt;
-              try {
-                localStorage.setItem('antrian_box_order_updated_at', data.state.boxOrderUpdatedAt);
-              } catch {
-                // ignore
-              }
-            }
+            updateBoxOrderWatermarkIfNewer(data.state.boxOrderUpdatedAt);
           }
 
           if (data.state.lastResetAt) {
@@ -1014,19 +1006,10 @@ export default function App() {
 
     hasLocalMutationRef.current = false;
 
-    // Debounce the actual network broadcast: several quick, separate user
-    // actions (e.g. checking off multiple patients in a row) each re-run this
-    // effect and previously fired one full-state POST apiece, which queued up
-    // behind each other on the server (each doing full disk read+merge+write)
-    // and delayed how fast peers saw the latest queue. Coalescing a short
-    // burst into a single POST with the latest state cuts that queueing delay
-    // without meaningfully slowing down a single isolated action. Tombstones
-    // are read from the refs only when the broadcast actually fires, so
-    // deletions from a run that gets superseded before its timer fires are
-    // never lost - they simply ride along with the next flush.
     if (broadcastDebounceTimerRef.current) {
       clearTimeout(broadcastDebounceTimerRef.current);
     }
+
     broadcastDebounceTimerRef.current = setTimeout(() => {
       broadcastDebounceTimerRef.current = null;
 
@@ -1044,11 +1027,11 @@ export default function App() {
         notifications,
         currentCallingPatient,
         currentCallingBox,
+        boxOrderUpdatedAt: boxOrderUpdatedAtRef.current || undefined,
         isExplicitReset: false,
         resetConfirmed: false,
         deletedPatientIds: deletedP,
         deletedBoxIds: deletedB,
-        boxOrderUpdatedAt: boxOrderUpdatedAtRef.current || undefined,
       });
     }, 250);
   }, [boxes, patients, callLogs, notifications, currentCallingPatient, currentCallingBox]);
@@ -1742,10 +1725,10 @@ export default function App() {
       notifications,
       currentCallingPatient: nextCallingPatient,
       currentCallingBox: nextCallingBox,
+      boxOrderUpdatedAt: boxOrderUpdatedAtRef.current || undefined,
       isExplicitReset: false,
       resetConfirmed: false,
       deletedPatientIds: patientIdsToClear,
-      boxOrderUpdatedAt: boxOrderUpdatedAtRef.current || undefined,
     }).catch(err => console.warn('Failed to broadcast box patient clear:', err));
 
     // 3. Archive patients to daily database in background
@@ -1886,8 +1869,8 @@ export default function App() {
       isExplicitReset: true,
       resetConfirmed: true,
       lastResetAt: resetTimestamp,
-      deletedPatientIds: currentPatientIds,
       boxOrderUpdatedAt: boxOrderUpdatedAtRef.current || undefined,
+      deletedPatientIds: currentPatientIds,
       lastUpdated: resetTimestamp,
     }).catch(err => console.warn('Failed to broadcast reset state:', err));
 
