@@ -2139,7 +2139,7 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 space-y-6 sm:space-y-8 pb-20 sm:pb-8">
+      <main className="flex-1 max-w-7xl 2xl:max-w-[1800px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 space-y-6 sm:space-y-8 pb-20 sm:pb-8">
         {currentView === 'analytics' ? (
           /* SEPARATE PAGE: ANALISIS DAN INTELIJEN BEBAN KERJA TERAPIS */
           <TherapistAnalyticsView
@@ -2215,7 +2215,7 @@ export default function App() {
                   <span>Di-Sematkan (Pinned Counters) ({visiblePinnedBoxes.length})</span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5">
                   {visiblePinnedBoxes.map((box) => {
                     const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
                     return (
@@ -2309,7 +2309,7 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5">
               {visibleOtherBoxes.map((box) => {
                 const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
                 return (
