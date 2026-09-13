@@ -9,8 +9,6 @@ export interface SyncDataState {
   callLogs: CallHistoryRecord[];
   notifications: AppNotification[];
   savedOfficers?: SavedOfficer[];
-  // Antrean Ranap (rawat inap) di sidebar - terpisah dari `patients` supaya
-  // tidak ikut dihitung oleh Respon Time kotak antrean.
   ranapQueue?: RanapQueueItem[];
   currentCallingPatient?: PatientItem | null;
   currentCallingBox?: QueueBox | null;
@@ -62,7 +60,7 @@ class RealtimeSyncManager {
           if (event.data && event.data.type === 'STATE_UPDATE' && event.data.senderDeviceId !== DEVICE_ID) {
             const incomingState = event.data.state;
             if (incomingState) {
-              this.lastKnownFingerprint = `${incomingState.lastUpdated || ''}_${incomingState.patients?.length || 0}_${incomingState.boxes?.length || 0}_${incomingState.callLogs?.length || 0}`;
+              this.lastKnownFingerprint = `${incomingState.lastUpdated || ''}_${incomingState.patients?.length || 0}_${incomingState.boxes?.length || 0}_${incomingState.callLogs?.length || 0}_${incomingState.ranapQueue?.length || 0}`;
             }
             this.notifyListeners(incomingState);
           }
@@ -80,7 +78,7 @@ class RealtimeSyncManager {
           try {
             const parsed = JSON.parse(event.newValue);
             if (parsed._senderDeviceId !== DEVICE_ID) {
-              this.lastKnownFingerprint = `${parsed.lastUpdated || ''}_${parsed.patients?.length || 0}_${parsed.boxes?.length || 0}_${parsed.callLogs?.length || 0}`;
+              this.lastKnownFingerprint = `${parsed.lastUpdated || ''}_${parsed.patients?.length || 0}_${parsed.boxes?.length || 0}_${parsed.callLogs?.length || 0}_${parsed.ranapQueue?.length || 0}`;
               this.notifyListeners(parsed);
             }
           } catch (e) {
@@ -128,7 +126,7 @@ class RealtimeSyncManager {
       .then(data => {
         if (data.status === 'ok' && data.state) {
           const boxImagesHash = (data.state.boxes || []).map((b: any) => `${b.id}:${(b.instructionImageUrls || []).length}:${b.instructionImageUrl || ''}`).join('|');
-          const fingerprint = `${data.state.lastUpdated || ''}_${data.state.patients?.length || 0}_${data.state.boxes?.length || 0}_${boxImagesHash}_${data.state.callLogs?.length || 0}`;
+          const fingerprint = `${data.state.lastUpdated || ''}_${data.state.patients?.length || 0}_${data.state.boxes?.length || 0}_${boxImagesHash}_${data.state.callLogs?.length || 0}_${data.state.ranapQueue?.length || 0}`;
           if (fingerprint === this.lastKnownFingerprint) {
             // State is identical, skip triggering re-renders
             return;
@@ -300,7 +298,7 @@ class RealtimeSyncManager {
   }
 
   public async broadcastState(state: SyncDataState) {
-    this.lastKnownFingerprint = `${state.lastUpdated || ''}_${state.patients?.length || 0}_${state.boxes?.length || 0}_${state.callLogs?.length || 0}`;
+    this.lastKnownFingerprint = `${state.lastUpdated || ''}_${state.patients?.length || 0}_${state.boxes?.length || 0}_${state.callLogs?.length || 0}_${state.ranapQueue?.length || 0}`;
     const payloadWithDevice = {
       ...state,
       _senderDeviceId: DEVICE_ID,

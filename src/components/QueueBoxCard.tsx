@@ -109,140 +109,334 @@ const COLOR_MAP: Record<BoxColor, {
   footerClass?: string;
   completedTrayClass?: string;
 }> = {
+  // Metalik Titanium & Klasik (Solid & Kuat)
   'metallic-dark': {
     isDark: true,
     bg: 'bg-gradient-to-b from-[#1e293b] via-[#0f172a] to-[#090d16]',
-    border: 'border-slate-700/80 shadow-[0_10px_28px_-5px_rgba(0,0,0,0.55),inset_0_1px_1px_rgba(255,255,255,0.18)]',
-    header: 'bg-gradient-to-r from-slate-900/95 via-slate-800/90 to-slate-900/95 text-white border-b border-slate-700/80',
+    border: 'border-slate-600 shadow-[0_10px_28px_-5px_rgba(0,0,0,0.55),inset_0_1px_1px_rgba(255,255,255,0.25)]',
+    header: 'bg-gradient-to-r from-slate-900/95 via-slate-800/90 to-slate-900/95 text-white border-b border-slate-700',
     badge: 'bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 text-slate-950 font-black shadow-md',
-    accentGlow: 'rgba(56, 189, 248, 0.25)',
-    titleColor: 'text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]',
-    locationClass: 'bg-slate-800/90 text-slate-200 border-slate-700/90 shadow-inner',
-    emptyStateClass: 'bg-slate-900/60 border-slate-700/80 text-slate-300 shadow-inner',
-    instructionClass: 'bg-slate-800/90 border-slate-700/90 text-slate-100 shadow-inner',
-    footerClass: 'bg-slate-900/95 border-t border-slate-800/90 shadow-inner',
-    completedTrayClass: 'bg-slate-950/80 border-t border-slate-800 text-slate-300'
+    accentGlow: 'rgba(56, 189, 248, 0.35)',
+    titleColor: 'text-white font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-slate-900/90 text-cyan-200 border-slate-600 font-bold shadow-inner',
+    emptyStateClass: 'bg-slate-900/70 border-slate-600 text-slate-200 shadow-inner',
+    instructionClass: 'bg-slate-900/90 border-slate-600 text-white shadow-inner',
+    footerClass: 'bg-slate-950/95 border-t border-slate-800 shadow-inner',
+    completedTrayClass: 'bg-slate-950/90 border-t border-slate-800 text-slate-300'
   },
   'metallic-bronze': {
     isDark: true,
-    bg: 'bg-gradient-to-b from-[#2d221a] via-[#1c1815] to-[#100d0b]',
-    border: 'border-amber-700/70 shadow-[0_10px_28px_-5px_rgba(0,0,0,0.55),inset_0_1px_1px_rgba(251,191,36,0.22)]',
-    header: 'bg-gradient-to-r from-stone-900/95 via-amber-950/80 to-stone-900/95 text-amber-100 border-b border-amber-800/70',
-    badge: 'bg-gradient-to-r from-amber-400 via-amber-300 to-yellow-400 text-slate-950 font-black shadow-md',
-    accentGlow: 'rgba(245, 158, 11, 0.25)',
-    titleColor: 'text-amber-100 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]',
-    locationClass: 'bg-stone-850/90 text-amber-200 border-amber-800/70 shadow-inner',
-    emptyStateClass: 'bg-stone-900/60 border-amber-900/60 text-amber-200/80 shadow-inner',
-    instructionClass: 'bg-stone-850/90 border-amber-800/70 text-amber-100 shadow-inner',
-    footerClass: 'bg-stone-900/95 border-t border-amber-950/80 shadow-inner',
-    completedTrayClass: 'bg-stone-950/80 border-t border-amber-950 text-amber-200/80'
+    bg: 'bg-gradient-to-b from-[#3d2a1c] via-[#241a12] to-[#120d09]',
+    border: 'border-amber-600/90 shadow-[0_10px_28px_-5px_rgba(0,0,0,0.55),inset_0_1px_1px_rgba(251,191,36,0.35)]',
+    header: 'bg-gradient-to-r from-stone-900/95 via-amber-950/90 to-stone-900/95 text-amber-100 border-b border-amber-700/80',
+    badge: 'bg-gradient-to-r from-amber-300 via-yellow-300 to-amber-400 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(245, 158, 11, 0.35)',
+    titleColor: 'text-amber-100 font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-stone-900/90 text-amber-200 border-amber-700 font-bold shadow-inner',
+    emptyStateClass: 'bg-stone-900/70 border-amber-800 text-amber-200 shadow-inner',
+    instructionClass: 'bg-stone-900/90 border-amber-700 text-white shadow-inner',
+    footerClass: 'bg-stone-950/95 border-t border-amber-950 shadow-inner',
+    completedTrayClass: 'bg-stone-950/90 border-t border-amber-950 text-amber-200'
   },
   'metallic-emerald': {
     isDark: true,
-    bg: 'bg-gradient-to-b from-[#0a2e26] via-[#051c17] to-[#020e0b]',
-    border: 'border-emerald-700/70 shadow-[0_10px_28px_-5px_rgba(0,0,0,0.55),inset_0_1px_1px_rgba(52,211,153,0.22)]',
-    header: 'bg-gradient-to-r from-teal-950/95 via-emerald-950/90 to-teal-950/95 text-emerald-100 border-b border-emerald-800/70',
-    badge: 'bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-300 text-slate-950 font-black shadow-md',
-    accentGlow: 'rgba(52, 211, 153, 0.25)',
-    titleColor: 'text-emerald-100 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]',
-    locationClass: 'bg-teal-900/90 text-emerald-200 border-emerald-800/70 shadow-inner',
-    emptyStateClass: 'bg-teal-950/60 border-emerald-900/60 text-emerald-200/80 shadow-inner',
-    instructionClass: 'bg-teal-900/90 border-emerald-800/70 text-emerald-100 shadow-inner',
+    bg: 'bg-gradient-to-b from-[#064e3b] via-[#022c22] to-[#021812]',
+    border: 'border-emerald-500/90 shadow-[0_10px_28px_-5px_rgba(0,0,0,0.55),inset_0_1px_1px_rgba(52,211,153,0.35)]',
+    header: 'bg-gradient-to-r from-teal-950/95 via-emerald-950/90 to-teal-950/95 text-emerald-100 border-b border-emerald-700/80',
+    badge: 'bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(52, 211, 153, 0.35)',
+    titleColor: 'text-emerald-100 font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-teal-950/90 text-emerald-200 border-emerald-600 font-bold shadow-inner',
+    emptyStateClass: 'bg-teal-950/70 border-emerald-700 text-emerald-200 shadow-inner',
+    instructionClass: 'bg-teal-950/90 border-emerald-600 text-white shadow-inner',
     footerClass: 'bg-teal-950/95 border-t border-emerald-950 shadow-inner',
-    completedTrayClass: 'bg-teal-950/80 border-t border-emerald-950 text-emerald-200/80'
+    completedTrayClass: 'bg-teal-950/90 border-t border-emerald-950 text-emerald-200'
   },
   'metallic-ocean': {
     isDark: true,
-    bg: 'bg-gradient-to-b from-[#102747] via-[#09172c] to-[#040b17]',
-    border: 'border-sky-700/70 shadow-[0_10px_28px_-5px_rgba(0,0,0,0.55),inset_0_1px_1px_rgba(56,189,248,0.22)]',
-    header: 'bg-gradient-to-r from-slate-950/95 via-sky-950/90 to-slate-950/95 text-sky-100 border-b border-sky-800/70',
-    badge: 'bg-gradient-to-r from-sky-400 via-cyan-300 to-blue-300 text-slate-950 font-black shadow-md',
-    accentGlow: 'rgba(56, 189, 248, 0.25)',
-    titleColor: 'text-sky-100 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]',
-    locationClass: 'bg-slate-900/90 text-sky-200 border-sky-800/70 shadow-inner',
-    emptyStateClass: 'bg-slate-950/60 border-sky-900/60 text-sky-200/80 shadow-inner',
-    instructionClass: 'bg-slate-900/90 border-sky-800/70 text-sky-100 shadow-inner',
+    bg: 'bg-gradient-to-b from-[#0c4a6e] via-[#082f49] to-[#02131f]',
+    border: 'border-sky-500/90 shadow-[0_10px_28px_-5px_rgba(0,0,0,0.55),inset_0_1px_1px_rgba(56,189,248,0.35)]',
+    header: 'bg-gradient-to-r from-slate-950/95 via-sky-950/90 to-slate-950/95 text-sky-100 border-b border-sky-700/80',
+    badge: 'bg-gradient-to-r from-sky-300 via-cyan-300 to-blue-300 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(56, 189, 248, 0.35)',
+    titleColor: 'text-sky-100 font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-slate-900/90 text-sky-200 border-sky-600 font-bold shadow-inner',
+    emptyStateClass: 'bg-slate-950/70 border-sky-700 text-sky-200 shadow-inner',
+    instructionClass: 'bg-slate-900/90 border-sky-600 text-white shadow-inner',
     footerClass: 'bg-slate-950/95 border-t border-sky-950 shadow-inner',
-    completedTrayClass: 'bg-slate-950/80 border-t border-sky-950 text-sky-200/80'
+    completedTrayClass: 'bg-slate-950/90 border-t border-sky-950 text-sky-200'
   },
+
+  // Warna Terang & Metalik Modern (Solid, Kuat & Berkontras Tinggi)
+  'metallic-blue': {
+    isDark: true,
+    bg: 'bg-gradient-to-b from-blue-700 via-blue-800 to-indigo-950',
+    border: 'border-blue-400 shadow-[0_10px_28px_-5px_rgba(29,78,216,0.6),inset_0_1px_1px_rgba(255,255,255,0.4)]',
+    header: 'bg-gradient-to-r from-blue-900/95 via-blue-800/90 to-indigo-950 text-white border-b border-blue-400/60',
+    badge: 'bg-gradient-to-r from-cyan-300 to-sky-300 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(59, 130, 246, 0.35)',
+    titleColor: 'text-white font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-blue-950/80 text-cyan-200 border-blue-400/60 font-bold shadow-inner',
+    emptyStateClass: 'bg-blue-950/60 border-blue-400/50 text-blue-100 shadow-inner',
+    instructionClass: 'bg-blue-950/80 border-blue-400/60 text-white shadow-inner',
+    footerClass: 'bg-blue-950/90 border-t border-blue-800 shadow-inner',
+    completedTrayClass: 'bg-blue-950/95 border-t border-blue-900 text-blue-200'
+  },
+  'metallic-purple': {
+    isDark: true,
+    bg: 'bg-gradient-to-b from-purple-700 via-purple-900 to-slate-950',
+    border: 'border-purple-400 shadow-[0_10px_28px_-5px_rgba(147,51,234,0.6),inset_0_1px_1px_rgba(255,255,255,0.4)]',
+    header: 'bg-gradient-to-r from-purple-950/95 via-purple-900/90 to-fuchsia-950 text-white border-b border-purple-400/60',
+    badge: 'bg-gradient-to-r from-fuchsia-300 to-purple-300 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(168, 85, 247, 0.35)',
+    titleColor: 'text-white font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-purple-950/80 text-purple-200 border-purple-400/60 font-bold shadow-inner',
+    emptyStateClass: 'bg-purple-950/60 border-purple-400/50 text-purple-100 shadow-inner',
+    instructionClass: 'bg-purple-950/80 border-purple-400/60 text-white shadow-inner',
+    footerClass: 'bg-purple-950/90 border-t border-purple-900 shadow-inner',
+    completedTrayClass: 'bg-purple-950/95 border-t border-purple-900 text-purple-200'
+  },
+  'metallic-orange': {
+    isDark: true,
+    bg: 'bg-gradient-to-b from-amber-600 via-orange-700 to-amber-950',
+    border: 'border-amber-400 shadow-[0_10px_28px_-5px_rgba(217,119,6,0.6),inset_0_1px_1px_rgba(255,255,255,0.45)]',
+    header: 'bg-gradient-to-r from-amber-950/95 via-orange-900/90 to-amber-950 text-white border-b border-amber-400/60',
+    badge: 'bg-gradient-to-r from-yellow-300 to-amber-300 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(249, 115, 22, 0.35)',
+    titleColor: 'text-white font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-amber-950/80 text-amber-200 border-amber-400/60 font-bold shadow-inner',
+    emptyStateClass: 'bg-amber-950/60 border-amber-400/50 text-amber-100 shadow-inner',
+    instructionClass: 'bg-amber-950/80 border-amber-400/60 text-white shadow-inner',
+    footerClass: 'bg-amber-950/90 border-t border-amber-900 shadow-inner',
+    completedTrayClass: 'bg-amber-950/95 border-t border-amber-900 text-amber-200'
+  },
+  'metallic-red': {
+    isDark: true,
+    bg: 'bg-gradient-to-b from-rose-700 via-red-800 to-slate-950',
+    border: 'border-rose-400 shadow-[0_10px_28px_-5px_rgba(225,29,72,0.6),inset_0_1px_1px_rgba(255,255,255,0.4)]',
+    header: 'bg-gradient-to-r from-rose-950/95 via-red-900/90 to-rose-950 text-white border-b border-rose-400/60',
+    badge: 'bg-gradient-to-r from-rose-300 to-red-300 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(244, 63, 94, 0.35)',
+    titleColor: 'text-white font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-rose-950/80 text-rose-200 border-rose-400/60 font-bold shadow-inner',
+    emptyStateClass: 'bg-rose-950/60 border-rose-400/50 text-rose-100 shadow-inner',
+    instructionClass: 'bg-rose-950/80 border-rose-400/60 text-white shadow-inner',
+    footerClass: 'bg-rose-950/90 border-t border-rose-900 shadow-inner',
+    completedTrayClass: 'bg-rose-950/95 border-t border-rose-900 text-rose-200'
+  },
+  'metallic-green': {
+    isDark: true,
+    bg: 'bg-gradient-to-b from-emerald-700 via-teal-800 to-slate-950',
+    border: 'border-emerald-400 shadow-[0_10px_28px_-5px_rgba(16,185,129,0.6),inset_0_1px_1px_rgba(255,255,255,0.4)]',
+    header: 'bg-gradient-to-r from-emerald-950/95 via-teal-900/90 to-emerald-950 text-white border-b border-emerald-400/60',
+    badge: 'bg-gradient-to-r from-emerald-300 to-teal-300 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(16, 185, 129, 0.35)',
+    titleColor: 'text-white font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-teal-950/80 text-emerald-200 border-emerald-400/60 font-bold shadow-inner',
+    emptyStateClass: 'bg-teal-950/60 border-emerald-400/50 text-emerald-100 shadow-inner',
+    instructionClass: 'bg-teal-950/80 border-emerald-400/60 text-white shadow-inner',
+    footerClass: 'bg-teal-950/90 border-t border-teal-900 shadow-inner',
+    completedTrayClass: 'bg-teal-950/95 border-t border-teal-900 text-emerald-200'
+  },
+  'metallic-sage': {
+    isDark: true,
+    bg: 'bg-gradient-to-b from-teal-700 via-emerald-800 to-slate-950',
+    border: 'border-teal-400 shadow-[0_10px_28px_-5px_rgba(20,184,166,0.6),inset_0_1px_1px_rgba(255,255,255,0.4)]',
+    header: 'bg-gradient-to-r from-teal-950/95 via-emerald-950/90 to-teal-950 text-white border-b border-teal-400/60',
+    badge: 'bg-gradient-to-r from-teal-300 to-emerald-300 text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(20, 184, 166, 0.35)',
+    titleColor: 'text-white font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-teal-950/80 text-teal-200 border-teal-400/60 font-bold shadow-inner',
+    emptyStateClass: 'bg-teal-950/60 border-teal-400/50 text-teal-100 shadow-inner',
+    instructionClass: 'bg-teal-950/80 border-teal-400/60 text-white shadow-inner',
+    footerClass: 'bg-teal-950/90 border-t border-teal-900 shadow-inner',
+    completedTrayClass: 'bg-teal-950/95 border-t border-teal-900 text-teal-200'
+  },
+  'metallic-yellow': {
+    isDark: false,
+    bg: 'bg-gradient-to-b from-yellow-300 via-amber-300 to-yellow-400',
+    border: 'border-yellow-500 shadow-[0_10px_28px_-5px_rgba(234,179,8,0.6),inset_0_1px_1px_rgba(255,255,255,0.8)]',
+    header: 'bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-400 text-slate-950 font-black border-b border-yellow-600/50',
+    badge: 'bg-slate-950 text-yellow-300 font-black shadow-md',
+    accentGlow: 'rgba(234, 179, 8, 0.35)',
+    titleColor: 'text-slate-950 font-black drop-shadow-[0_1px_1px_rgba(255,255,255,0.8)]',
+    locationClass: 'bg-amber-950/15 text-slate-950 border-amber-600/70 font-black shadow-2xs',
+    emptyStateClass: 'bg-yellow-200/70 border-amber-500/70 text-amber-950 font-bold shadow-2xs',
+    instructionClass: 'bg-yellow-200/90 border-amber-500/70 text-slate-950 font-bold shadow-2xs',
+    footerClass: 'bg-yellow-400/90 border-t border-amber-500/70 shadow-inner',
+    completedTrayClass: 'bg-yellow-500/30 border-t border-amber-500/70 text-slate-950 font-bold'
+  },
+  'metallic-silver': {
+    isDark: true,
+    bg: 'bg-gradient-to-b from-slate-700 via-slate-800 to-slate-950',
+    border: 'border-slate-400 shadow-[0_10px_28px_-5px_rgba(100,116,139,0.6),inset_0_1px_1px_rgba(255,255,255,0.5)]',
+    header: 'bg-gradient-to-r from-slate-850 via-slate-800 to-slate-900 text-white border-b border-slate-400/60',
+    badge: 'bg-gradient-to-r from-slate-200 to-white text-slate-950 font-black shadow-md',
+    accentGlow: 'rgba(100, 116, 139, 0.35)',
+    titleColor: 'text-white font-black drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]',
+    locationClass: 'bg-slate-900/90 text-slate-200 border-slate-500/60 font-bold shadow-inner',
+    emptyStateClass: 'bg-slate-900/60 border-slate-500/50 text-slate-200 shadow-inner',
+    instructionClass: 'bg-slate-900/90 border-slate-500/60 text-white shadow-inner',
+    footerClass: 'bg-slate-900/90 border-t border-slate-700 shadow-inner',
+    completedTrayClass: 'bg-slate-950/95 border-t border-slate-800 text-slate-200'
+  },
+
+  // Warna Doff (Matte Pastel Lembut & Teks Sangat Jelas - Gaya Sticky Note / Google Keep)
   sage: {
-    bg: 'bg-gradient-to-b from-emerald-50/80 to-slate-50/90',
-    border: 'border-emerald-200/90',
-    header: 'bg-gradient-to-r from-emerald-100/90 via-emerald-50/90 to-teal-50/90 text-emerald-950 border-b border-emerald-200/80',
-    badge: 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-2xs',
-    accentGlow: 'rgba(16, 185, 129, 0.12)'
+    isDark: false,
+    bg: 'bg-[#daf2ec]',
+    border: 'border-[#a8e3d6] shadow-[0_4px_16px_-2px_rgba(20,184,166,0.18)]',
+    header: 'bg-[#c9ebe2]/80 text-slate-900 border-b border-[#a8e3d6]/80',
+    badge: 'bg-slate-900 text-teal-100 font-black shadow-xs',
+    accentGlow: 'rgba(20, 184, 166, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#e8f8f4] text-slate-900 border-[#a8e3d6] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#f2fbf8]/90 border-[#a8e3d6] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#f2fbf8]/95 border-[#a8e3d6] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#c9ebe2]/80 border-t border-[#a8e3d6]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#c9ebe2]/60 border-t border-[#a8e3d6]/80 text-slate-800'
   },
   blue: {
-    bg: 'bg-gradient-to-b from-sky-50/80 to-slate-50/90',
-    border: 'border-sky-200/90',
-    header: 'bg-gradient-to-r from-sky-100/90 via-sky-50/90 to-blue-50/90 text-sky-950 border-b border-sky-200/80',
-    badge: 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-2xs',
-    accentGlow: 'rgba(2, 132, 199, 0.12)'
+    isDark: false,
+    bg: 'bg-[#d2f3fc]',
+    border: 'border-[#9ce3f5] shadow-[0_4px_16px_-2px_rgba(56,189,248,0.18)]',
+    header: 'bg-[#c3eefa]/80 text-slate-900 border-b border-[#9ce3f5]/80',
+    badge: 'bg-slate-900 text-sky-100 font-black shadow-xs',
+    accentGlow: 'rgba(56, 189, 248, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#e0f7fd] text-slate-900 border-[#9ce3f5] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#ebfaff]/90 border-[#9ce3f5] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#ebfaff]/95 border-[#9ce3f5] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#c3eefa]/80 border-t border-[#9ce3f5]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#c3eefa]/60 border-t border-[#9ce3f5]/80 text-slate-800'
   },
   purple: {
-    bg: 'bg-gradient-to-b from-purple-50/80 to-slate-50/90',
-    border: 'border-purple-200/90',
-    header: 'bg-gradient-to-r from-purple-100/90 via-purple-50/90 to-fuchsia-50/90 text-purple-950 border-b border-purple-200/80',
-    badge: 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-2xs',
-    accentGlow: 'rgba(147, 51, 234, 0.12)'
+    isDark: false,
+    bg: 'bg-[#ede4f8]',
+    border: 'border-[#d3bdf0] shadow-[0_4px_16px_-2px_rgba(168,85,247,0.18)]',
+    header: 'bg-[#e2d4f3]/80 text-slate-900 border-b border-[#d3bdf0]/80',
+    badge: 'bg-slate-900 text-purple-100 font-black shadow-xs',
+    accentGlow: 'rgba(168, 85, 247, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#f4ecfb] text-slate-900 border-[#d3bdf0] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#f8f4fd]/90 border-[#d3bdf0] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#f8f4fd]/95 border-[#d3bdf0] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#e2d4f3]/80 border-t border-[#d3bdf0]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#e2d4f3]/60 border-t border-[#d3bdf0]/80 text-slate-800'
   },
   orange: {
-    bg: 'bg-gradient-to-b from-amber-50/80 to-slate-50/90',
-    border: 'border-amber-200/90',
-    header: 'bg-gradient-to-r from-amber-100/90 via-amber-50/90 to-orange-50/90 text-amber-950 border-b border-amber-200/80',
-    badge: 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-2xs',
-    accentGlow: 'rgba(217, 119, 6, 0.12)'
+    isDark: false,
+    bg: 'bg-[#fee8d1]',
+    border: 'border-[#fbcda1] shadow-[0_4px_16px_-2px_rgba(249,115,22,0.18)]',
+    header: 'bg-[#feddbb]/80 text-slate-900 border-b border-[#fbcda1]/80',
+    badge: 'bg-slate-900 text-orange-100 font-black shadow-xs',
+    accentGlow: 'rgba(249, 115, 22, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#fff0e0] text-slate-900 border-[#fbcda1] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#fff6ec]/90 border-[#fbcda1] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#fff6ec]/95 border-[#fbcda1] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#feddbb]/80 border-t border-[#fbcda1]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#feddbb]/60 border-t border-[#fbcda1]/80 text-slate-800'
   },
   coral: {
-    bg: 'bg-gradient-to-b from-rose-50/80 to-slate-50/90',
-    border: 'border-rose-200/90',
-    header: 'bg-gradient-to-r from-rose-100/90 via-rose-50/90 to-pink-50/90 text-rose-950 border-b border-rose-200/80',
-    badge: 'bg-gradient-to-r from-rose-600 to-red-600 text-white shadow-2xs',
-    accentGlow: 'rgba(225, 29, 72, 0.12)'
+    isDark: false,
+    bg: 'bg-[#fed9dd]',
+    border: 'border-[#fcaeb7] shadow-[0_4px_16px_-2px_rgba(244,63,94,0.18)]',
+    header: 'bg-[#fec7cc]/80 text-slate-900 border-b border-[#fcaeb7]/80',
+    badge: 'bg-slate-900 text-rose-100 font-black shadow-xs',
+    accentGlow: 'rgba(244, 63, 94, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#ffe4e7] text-slate-900 border-[#fcaeb7] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#fff0f2]/90 border-[#fcaeb7] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#fff0f2]/95 border-[#fcaeb7] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#fec7cc]/80 border-t border-[#fcaeb7]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#fec7cc]/60 border-t border-[#fcaeb7]/80 text-slate-800'
   },
   green: {
-    bg: 'bg-gradient-to-b from-teal-50/80 to-slate-50/90',
-    border: 'border-teal-200/90',
-    header: 'bg-gradient-to-r from-teal-100/90 via-teal-50/90 to-emerald-50/90 text-teal-950 border-b border-teal-200/80',
-    badge: 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-2xs',
-    accentGlow: 'rgba(13, 148, 136, 0.12)'
+    isDark: false,
+    bg: 'bg-[#e2f9d7]',
+    border: 'border-[#b8ed9f] shadow-[0_4px_16px_-2px_rgba(34,197,94,0.18)]',
+    header: 'bg-[#d3f4c4]/80 text-slate-900 border-b border-[#b8ed9f]/80',
+    badge: 'bg-slate-900 text-emerald-100 font-black shadow-xs',
+    accentGlow: 'rgba(34, 197, 94, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#ecfde5] text-slate-900 border-[#b8ed9f] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#f4fdf0]/90 border-[#b8ed9f] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#f4fdf0]/95 border-[#b8ed9f] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#d3f4c4]/80 border-t border-[#b8ed9f]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#d3f4c4]/60 border-t border-[#b8ed9f]/80 text-slate-800'
   },
   yellow: {
-    bg: 'bg-gradient-to-b from-yellow-50/80 to-slate-50/90',
-    border: 'border-yellow-200/90',
-    header: 'bg-gradient-to-r from-yellow-100/90 via-amber-50/90 to-yellow-50/90 text-yellow-950 border-b border-yellow-200/80',
-    badge: 'bg-gradient-to-r from-yellow-600 to-amber-600 text-white shadow-2xs',
-    accentGlow: 'rgba(202, 138, 4, 0.12)'
+    isDark: false,
+    bg: 'bg-[#fff9b0]',
+    border: 'border-[#f2dd6e] shadow-[0_4px_16px_-2px_rgba(217,170,30,0.18)]',
+    header: 'bg-[#fff59d]/80 text-slate-900 border-b border-[#f2dd6e]/80',
+    badge: 'bg-slate-900 text-yellow-100 font-black shadow-xs',
+    accentGlow: 'rgba(234, 179, 8, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#fffaab] text-slate-900 border-[#edd047] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#fffdeb]/90 border-[#f2dd6e] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#fffdeb]/95 border-[#f2dd6e] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#fff59d]/80 border-t border-[#f2dd6e]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#fff59d]/60 border-t border-[#f2dd6e]/80 text-slate-800'
   },
   pink: {
-    bg: 'bg-gradient-to-b from-pink-50/80 to-slate-50/90',
-    border: 'border-pink-200/90',
-    header: 'bg-gradient-to-r from-pink-100/90 via-rose-50/90 to-pink-50/90 text-pink-950 border-b border-pink-200/80',
-    badge: 'bg-gradient-to-r from-pink-600 to-rose-600 text-white shadow-2xs',
-    accentGlow: 'rgba(219, 39, 119, 0.12)'
+    isDark: false,
+    bg: 'bg-[#fde2ef]',
+    border: 'border-[#f9bfde] shadow-[0_4px_16px_-2px_rgba(236,72,153,0.18)]',
+    header: 'bg-[#fbd1e7]/80 text-slate-900 border-b border-[#f9bfde]/80',
+    badge: 'bg-slate-900 text-pink-100 font-black shadow-xs',
+    accentGlow: 'rgba(236, 72, 153, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#feecf5] text-slate-900 border-[#f9bfde] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#fef4f9]/90 border-[#f9bfde] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#fef4f9]/95 border-[#f9bfde] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#fbd1e7]/80 border-t border-[#f9bfde]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#fbd1e7]/60 border-t border-[#f9bfde]/80 text-slate-800'
   },
   gray: {
-    bg: 'bg-gradient-to-b from-slate-50/90 to-slate-100/80',
-    border: 'border-slate-300/80',
-    header: 'bg-gradient-to-r from-slate-200/90 via-slate-100/90 to-slate-50/90 text-slate-950 border-b border-slate-200/80',
-    badge: 'bg-gradient-to-r from-slate-700 to-slate-900 text-white shadow-2xs',
-    accentGlow: 'rgba(71, 85, 105, 0.12)'
+    isDark: false,
+    bg: 'bg-[#edf0f2]',
+    border: 'border-[#cbd3d9] shadow-[0_4px_16px_-2px_rgba(100,116,139,0.15)]',
+    header: 'bg-[#e0e5e9]/80 text-slate-900 border-b border-[#cbd3d9]/80',
+    badge: 'bg-slate-900 text-slate-100 font-black shadow-xs',
+    accentGlow: 'rgba(100, 116, 139, 0.2)',
+    titleColor: 'text-slate-950 font-black',
+    locationClass: 'bg-[#f4f6f7] text-slate-900 border-[#cbd3d9] font-bold shadow-2xs',
+    emptyStateClass: 'bg-[#f8fafb]/90 border-[#cbd3d9] text-slate-800 shadow-2xs',
+    instructionClass: 'bg-[#f8fafb]/95 border-[#cbd3d9] text-slate-900 shadow-2xs',
+    footerClass: 'bg-[#e0e5e9]/80 border-t border-[#cbd3d9]/80 shadow-2xs',
+    completedTrayClass: 'bg-[#e0e5e9]/60 border-t border-[#cbd3d9]/80 text-slate-800'
   },
 };
 
 const COLOR_OPTIONS: { id: BoxColor; label: string; class: string }[] = [
-  { id: 'metallic-dark', label: '★ Metalik Titanium', class: 'bg-slate-900 border-slate-700 ring-1 ring-slate-500' },
-  { id: 'metallic-bronze', label: '★ Metalik Bronze', class: 'bg-stone-900 border-amber-700 ring-1 ring-amber-500' },
-  { id: 'metallic-emerald', label: '★ Metalik Jade', class: 'bg-teal-950 border-emerald-700 ring-1 ring-emerald-500' },
-  { id: 'metallic-ocean', label: '★ Metalik Sapphire', class: 'bg-sky-950 border-sky-700 ring-1 ring-sky-500' },
-  { id: 'blue', label: 'Biru', class: 'bg-sky-200' },
-  { id: 'purple', label: 'Ungu', class: 'bg-purple-200' },
-  { id: 'orange', label: 'Oranye', class: 'bg-amber-200' },
-  { id: 'coral', label: 'Merah/Muda', class: 'bg-rose-200' },
-  { id: 'green', label: 'Hijau', class: 'bg-emerald-200' },
-  { id: 'sage', label: 'Sage', class: 'bg-teal-200' },
-  { id: 'yellow', label: 'Kuning', class: 'bg-yellow-200' },
-  { id: 'gray', label: 'Abu-abu', class: 'bg-slate-200' },
+  // Warna Terang & Metalik Modern
+  { id: 'metallic-blue', label: '⚡ Biru Metalik', class: 'bg-blue-700 border-blue-400 text-white font-bold' },
+  { id: 'metallic-purple', label: '⚡ Ungu Metalik', class: 'bg-purple-700 border-purple-400 text-white font-bold' },
+  { id: 'metallic-orange', label: '⚡ Oranye Metalik', class: 'bg-amber-600 border-amber-400 text-white font-bold' },
+  { id: 'metallic-red', label: '⚡ Merah Metalik', class: 'bg-rose-700 border-rose-400 text-white font-bold' },
+  { id: 'metallic-green', label: '⚡ Hijau Metalik', class: 'bg-emerald-700 border-emerald-400 text-white font-bold' },
+  { id: 'metallic-sage', label: '⚡ Sage Metalik', class: 'bg-teal-700 border-teal-400 text-white font-bold' },
+  { id: 'metallic-yellow', label: '⚡ Kuning Metalik', class: 'bg-yellow-400 border-yellow-500 text-slate-950 font-black' },
+  { id: 'metallic-silver', label: '⚡ Abu Platinum', class: 'bg-slate-700 border-slate-400 text-white font-bold' },
+
+  // Metalik Titanium & Klasik
+  { id: 'metallic-dark', label: '★ Metalik Titanium', class: 'bg-slate-900 border-slate-600 text-white font-bold' },
+  { id: 'metallic-bronze', label: '★ Metalik Bronze', class: 'bg-stone-900 border-amber-600 text-amber-200 font-bold' },
+  { id: 'metallic-emerald', label: '★ Metalik Jade', class: 'bg-teal-950 border-emerald-600 text-emerald-200 font-bold' },
+  { id: 'metallic-ocean', label: '★ Metalik Sapphire', class: 'bg-sky-950 border-sky-600 text-sky-200 font-bold' },
+
+  // Warna Doff (Matte Pastel Lembut & Teks Sangat Jelas)
+  { id: 'yellow', label: 'Kuning Doff', class: 'bg-[#fff9b0] border-[#f2dd6e] text-slate-900 font-bold' },
+  { id: 'blue', label: 'Biru Doff', class: 'bg-[#d2f3fc] border-[#9ce3f5] text-slate-900 font-bold' },
+  { id: 'purple', label: 'Ungu Doff', class: 'bg-[#ede4f8] border-[#d3bdf0] text-slate-900 font-bold' },
+  { id: 'orange', label: 'Oranye Doff', class: 'bg-[#fee8d1] border-[#fbcda1] text-slate-900 font-bold' },
+  { id: 'coral', label: 'Merah Doff', class: 'bg-[#fed9dd] border-[#fcaeb7] text-slate-900 font-bold' },
+  { id: 'green', label: 'Hijau Doff', class: 'bg-[#e2f9d7] border-[#b8ed9f] text-slate-900 font-bold' },
+  { id: 'sage', label: 'Sage Doff', class: 'bg-[#daf2ec] border-[#a8e3d6] text-slate-900 font-bold' },
+  { id: 'pink', label: 'Pink Doff', class: 'bg-[#fde2ef] border-[#f9bfde] text-slate-900 font-bold' },
+  { id: 'gray', label: 'Abu Doff', class: 'bg-[#edf0f2] border-[#cbd3d9] text-slate-900 font-bold' },
 ];
 
 export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
@@ -1039,7 +1233,7 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span 
                               onClick={() => startEditPatient(patient)}
-                              className={`font-bold text-xs sm:text-sm tracking-tight break-words leading-snug cursor-pointer transition-colors ${
+                              className={`font-bold text-[15px] tracking-tight break-words leading-snug cursor-pointer transition-colors ${
                                 patient.isReady === false 
                                   ? 'text-slate-500 line-through opacity-85 hover:text-blue-700' 
                                   : 'text-slate-950 hover:text-blue-700 hover:underline decoration-blue-400 underline-offset-2'
@@ -1049,7 +1243,7 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                               {patient.patientName}
                             </span>
 
-                            <span className="font-mono bg-slate-100 px-1.5 py-0.2 rounded text-slate-700 font-semibold border border-slate-200/80 text-[10px] sm:text-[11px] shrink-0">
+                            <span className="font-mono bg-slate-100 px-1.5 py-0.2 rounded text-slate-700 font-semibold border border-slate-200/80 text-[14px] leading-[19.5px] shrink-0">
                               RM: {patient.medicalRecordNo}
                             </span>
 

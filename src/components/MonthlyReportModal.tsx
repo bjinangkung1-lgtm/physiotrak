@@ -128,7 +128,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
   });
 
   // Filter completed patients belonging to selected month and year
-  const completedPatientsInMonth: Array<PatientItem & { officerName?: string; boxTitle?: string }> = combinedList
+  const completedPatientsInMonth: PatientItem[] = combinedList
     .filter((p: any) => {
       if (!p.completed) return false;
       const rawDate = p.completedAt || p.createdAt || p.registeredAt;
@@ -142,13 +142,9 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
       patientName: p.patientName,
       medicalRecordNo: p.medicalRecordNo,
       boxId: p.boxId || 'box-1',
-      // Snapshot nama terapis & judul kotak PADA SAAT kunjungan dicatat (lihat
-      // server.ts syncPatientsToMasterAndArchive). Dipakai lebih diutamakan
-      // daripada `boxes` yang sedang aktif sekarang di pengelompokan bawah,
-      // supaya riwayat bulan lalu tidak "berpindah terapis" begitu saja saat
-      // sebuah kotak diganti nama/petugas atau dihapus (rotasi shift, dst).
-      officerName: p.officerName || '',
       boxTitle: p.boxTitle || '',
+      officerName: p.officerName || p.firstOfficerName || '',
+      category: p.category || '',
       queueNumber: p.queueNumber || '',
       actionCode: p.actionCode || '',
       diagnosis: p.diagnosis || '',
@@ -163,7 +159,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
       calledCount: p.calledCount || 1,
     }));
 
-  // Group patients by Therapist / Officer Name (fallback to Box Title)
+  // Group patients by Therapist / Officer Name (utilizing frozen officerName & boxTitle first)
   interface TherapistGroup {
     therapistName: string;
     boxId: string;
@@ -177,39 +173,45 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
 
   const therapistMap = new Map<string, TherapistGroup>();
 
-  // Initialize for all active boxes
-  boxes.forEach(box => {
-    const key = box.officerName.trim() || box.title.trim();
-    if (!therapistMap.has(key)) {
-      therapistMap.set(key, {
-        therapistName: box.officerName || box.title,
-        boxId: box.id,
-        boxTitle: box.title,
-        location: box.location,
-        patients: [],
-        actionCounts: {},
-        ranapCount: 0,
-        rajalCount: 0
-      });
-    }
-  });
+  // For the current active month, pre-initialize active boxes so therapists on duty show up even with 0 visits
+  const isCurrentMonth = selectedYear === now.getFullYear() && selectedMonth === (now.getMonth() + 1);
+  if (isCurrentMonth) {
+    boxes.forEach(box => {
+      const name = (box.officerName || box.title || '').trim();
+      if (name && !therapistMap.has(name)) {
+        therapistMap.set(name, {
+          therapistName: box.officerName || box.title,
+          boxId: box.id,
+          boxTitle: box.title,
+          location: box.location,
+          patients: [],
+          actionCounts: {},
+          ranapCount: 0,
+          rajalCount: 0
+        });
+      }
+    });
+  }
 
-  // Populate patients into groups
+  // Populate patients into groups (prioritize frozen officerName & boxTitle to ensure historical archives remain immutable)
   completedPatientsInMonth.forEach(p => {
-    const box = boxes.find(b => b.id === p.boxId);
-    // Utamakan snapshot officerName/boxTitle yang dibekukan saat kunjungan
-    // dicatat; baru jatuh ke box yang AKTIF SEKARANG untuk arsip lama yang
-    // belum punya snapshot ini, lalu 'Lainnya / Umum' sebagai jalan terakhir.
-    const snapshotName = (p.officerName && p.officerName.trim()) || (p.boxTitle && p.boxTitle.trim());
-    const liveName = box ? (box.officerName.trim() || box.title.trim()) : '';
-    const key = snapshotName || liveName || 'Lainnya / Umum';
+    const frozenOfficer = (p.officerName || '').trim();
+    const frozenBoxTitle = (p.boxTitle || '').trim();
+    const fallbackBox = boxes.find(b => b.id === p.boxId);
+
+    // Primary attribution: frozen officerName -> active box officerName -> frozen boxTitle -> active box title -> 'Lainnya / Umum'
+    const therapistName = frozenOfficer || (fallbackBox?.officerName ? fallbackBox.officerName.trim() : '') || frozenBoxTitle || (fallbackBox?.title ? fallbackBox.title.trim() : '') || 'Lainnya / Umum';
+    const boxTitle = frozenBoxTitle || fallbackBox?.title || (frozenOfficer ? `Kotak ${frozenOfficer}` : 'Ruangan');
+    const location = fallbackBox?.location || '-';
+
+    const key = therapistName;
 
     if (!therapistMap.has(key)) {
       therapistMap.set(key, {
-        therapistName: p.officerName || p.boxTitle || (box ? (box.officerName || box.title) : 'Lainnya'),
-        boxId: p.boxId,
-        boxTitle: p.boxTitle || (box ? box.title : 'Ruangan'),
-        location: box ? box.location : '-',
+        therapistName,
+        boxId: p.boxId || (fallbackBox ? fallbackBox.id : 'unknown'),
+        boxTitle,
+        location,
         patients: [],
         actionCounts: {},
         ranapCount: 0,

@@ -869,24 +869,23 @@ export const databaseService = {
     }
   },
 
-  // Riwayat Antrean Ranap (dipakai untuk "informasi di lain hari")
   async getRanapHistory(filters?: { category?: string; search?: string; startDate?: string; endDate?: string }): Promise<RanapHistoryItem[]> {
     try {
       const params = new URLSearchParams();
-      if (filters?.category && filters.category !== 'all') params.set('category', filters.category);
-      if (filters?.search) params.set('search', filters.search);
-      if (filters?.startDate) params.set('startDate', filters.startDate);
-      if (filters?.endDate) params.set('endDate', filters.endDate);
+      if (filters?.category) params.append('category', filters.category);
+      if (filters?.search) params.append('search', filters.search);
+      if (filters?.startDate) params.append('startDate', filters.startDate);
+      if (filters?.endDate) params.append('endDate', filters.endDate);
 
-      const res = await fetch(`/api/ranap-history${params.toString() ? `?${params.toString()}` : ''}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.history)) return data.history;
-      }
+      const qs = params.toString();
+      const res = await fetch(`/api/ranap-history${qs ? `?${qs}` : ''}`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      return Array.isArray(data.history) ? data.history : [];
     } catch (err) {
       console.warn('Failed to fetch ranap history:', err);
+      return [];
     }
-    return [];
   },
 
   async saveRanapHistoryItem(item: RanapHistoryItem): Promise<RanapHistoryItem | null> {
@@ -900,10 +899,11 @@ export const databaseService = {
         const data = await res.json();
         return data.item || item;
       }
+      return item;
     } catch (err) {
-      console.warn('Failed to save ranap history item:', err);
+      console.error('Failed to save ranap history item:', err);
+      return null;
     }
-    return null;
   }
 };
 

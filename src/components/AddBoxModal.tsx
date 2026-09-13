@@ -11,18 +11,32 @@ interface AddBoxModalProps {
 }
 
 const COLOR_OPTIONS: { id: BoxColor; label: string; class: string }[] = [
-  { id: 'metallic-dark', label: '★ Metalik Titanium', class: 'bg-slate-900 border-slate-700 text-white shadow-xs' },
-  { id: 'metallic-bronze', label: '★ Metalik Bronze', class: 'bg-stone-900 border-amber-800 text-amber-200 shadow-xs' },
-  { id: 'metallic-emerald', label: '★ Metalik Jade', class: 'bg-teal-950 border-emerald-800 text-emerald-200 shadow-xs' },
-  { id: 'metallic-ocean', label: '★ Metalik Sapphire', class: 'bg-sky-950 border-sky-800 text-sky-200 shadow-xs' },
-  { id: 'blue', label: 'Biru Soft', class: 'bg-sky-100 border-sky-300 text-sky-900' },
-  { id: 'purple', label: 'Ungu Soft', class: 'bg-purple-100 border-purple-300 text-purple-900' },
-  { id: 'orange', label: 'Oranye Soft', class: 'bg-amber-100 border-amber-300 text-amber-900' },
-  { id: 'coral', label: 'Merah / Coral', class: 'bg-rose-100 border-rose-300 text-rose-900' },
-  { id: 'green', label: 'Hijau Toska', class: 'bg-teal-100 border-teal-300 text-teal-900' },
-  { id: 'sage', label: 'Sage Green', class: 'bg-emerald-100 border-emerald-300 text-emerald-900' },
-  { id: 'yellow', label: 'Kuning Soft', class: 'bg-yellow-100 border-yellow-300 text-yellow-900' },
-  { id: 'gray', label: 'Abu Neutral', class: 'bg-slate-100 border-slate-300 text-slate-900' },
+  // Warna Terang & Metalik Modern
+  { id: 'metallic-blue', label: '⚡ Biru Metalik', class: 'bg-blue-700 border-blue-400 text-white font-bold' },
+  { id: 'metallic-purple', label: '⚡ Ungu Metalik', class: 'bg-purple-700 border-purple-400 text-white font-bold' },
+  { id: 'metallic-orange', label: '⚡ Oranye Metalik', class: 'bg-amber-600 border-amber-400 text-white font-bold' },
+  { id: 'metallic-red', label: '⚡ Merah Metalik', class: 'bg-rose-700 border-rose-400 text-white font-bold' },
+  { id: 'metallic-green', label: '⚡ Hijau Metalik', class: 'bg-emerald-700 border-emerald-400 text-white font-bold' },
+  { id: 'metallic-sage', label: '⚡ Sage Metalik', class: 'bg-teal-700 border-teal-400 text-white font-bold' },
+  { id: 'metallic-yellow', label: '⚡ Kuning Metalik', class: 'bg-yellow-400 border-yellow-500 text-slate-950 font-black' },
+  { id: 'metallic-silver', label: '⚡ Abu Platinum', class: 'bg-slate-700 border-slate-400 text-white font-bold' },
+
+  // Metalik Titanium & Klasik
+  { id: 'metallic-dark', label: '★ Metalik Titanium', class: 'bg-slate-900 border-slate-600 text-white font-bold' },
+  { id: 'metallic-bronze', label: '★ Metalik Bronze', class: 'bg-stone-900 border-amber-600 text-amber-200 font-bold' },
+  { id: 'metallic-emerald', label: '★ Metalik Jade', class: 'bg-teal-950 border-emerald-600 text-emerald-200 font-bold' },
+  { id: 'metallic-ocean', label: '★ Metalik Sapphire', class: 'bg-sky-950 border-sky-600 text-sky-200 font-bold' },
+
+  // Warna Doff (Matte Pastel Lembut & Teks Sangat Jelas)
+  { id: 'yellow', label: 'Kuning Doff', class: 'bg-[#fff9b0] border-[#f2dd6e] text-slate-900 font-bold' },
+  { id: 'blue', label: 'Biru Doff', class: 'bg-[#d2f3fc] border-[#9ce3f5] text-slate-900 font-bold' },
+  { id: 'purple', label: 'Ungu Doff', class: 'bg-[#ede4f8] border-[#d3bdf0] text-slate-900 font-bold' },
+  { id: 'orange', label: 'Oranye Doff', class: 'bg-[#fee8d1] border-[#fbcda1] text-slate-900 font-bold' },
+  { id: 'coral', label: 'Merah Doff', class: 'bg-[#fed9dd] border-[#fcaeb7] text-slate-900 font-bold' },
+  { id: 'green', label: 'Hijau Doff', class: 'bg-[#e2f9d7] border-[#b8ed9f] text-slate-900 font-bold' },
+  { id: 'sage', label: 'Sage Doff', class: 'bg-[#daf2ec] border-[#a8e3d6] text-slate-900 font-bold' },
+  { id: 'pink', label: 'Pink Doff', class: 'bg-[#fde2ef] border-[#f9bfde] text-slate-900 font-bold' },
+  { id: 'gray', label: 'Abu Doff', class: 'bg-[#edf0f2] border-[#cbd3d9] text-slate-900 font-bold' },
 ];
 
 export const AddBoxModal: React.FC<AddBoxModalProps> = ({

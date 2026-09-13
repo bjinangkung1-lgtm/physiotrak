@@ -103,6 +103,8 @@ export const cloudDatabaseService = {
         lastResetAt: state.lastResetAt || null,
         deletedPatientIds: state.deletedPatientIds || [],
         deletedBoxIds: state.deletedBoxIds || [],
+        deletedRanapIds: state.deletedRanapIds || [],
+        ranapQueue: state.ranapQueue || [],
         lastUpdated: new Date().toISOString()
       }));
       // Overwrite the single system_state document cleanly to prevent stale deletedPatientIds or isExplicitReset flags

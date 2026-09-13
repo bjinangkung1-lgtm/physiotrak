@@ -11,7 +11,15 @@ export type BoxColor =
   | 'metallic-dark'
   | 'metallic-bronze'
   | 'metallic-emerald'
-  | 'metallic-ocean';
+  | 'metallic-ocean'
+  | 'metallic-blue'
+  | 'metallic-purple'
+  | 'metallic-orange'
+  | 'metallic-red'
+  | 'metallic-green'
+  | 'metallic-sage'
+  | 'metallic-yellow'
+  | 'metallic-silver';
 
 export interface PatientInstructionPhoto {
   id: string;
@@ -101,8 +109,11 @@ export interface DailyPatientVisit {
   medicalRecordNo: string;
   patientName: string;
   boxId: string;
-  boxTitle?: string; // e.g. "BOX 1 (Fisioterapi)"
-  officerName?: string; // e.g. "Ahmad Fauzi, S.Ft"
+  boxTitle?: string; // e.g. "BOX 1 (Fisioterapi)" - nama kotak saat kunjungan
+  officerName?: string; // e.g. "Ahmad Fauzi, S.Ft" - nama terapis saat kunjungan dibekukan
+  category?: 'fisio' | 'okupasi' | 'wicara' | string; // Divisi Terapi saat kunjungan
+  firstOfficerName?: string;
+  firstBoxTitle?: string;
   queueNumber: string;
   actionCode?: string;
   diagnosis?: string;
@@ -123,6 +134,8 @@ export interface DailyPatientVisit {
 export interface PatientItem {
   id: string;
   boxId: string;
+  boxTitle?: string; // Judul kotak tempat pasien mengantri
+  officerName?: string; // Nama terapis yang sedang / akan menangani
   queueNumber: string; // e.g. "A-001" or "1"
   patientName: string; // e.g. "MUFLIHATI, NY"
   medicalRecordNo: string; // e.g. "273267"
@@ -209,10 +222,10 @@ export interface QueueBox {
   hasUnreadNewInput?: boolean;
   order?: number; // Explicit visual sequence order index
   createdAt: string;
-  // Watermark stamped whenever CONTENT fields (color, title, image, dll) change,
-  // so a stale full-state broadcast from another device can never silently
-  // overwrite a newer edit made elsewhere - see mergeBoxesByRecency in App.tsx
-  // and the matching recency check in server.ts reconcileQueueStates.
+  // Watermark stamped whenever CONTENT fields (warna, judul, gambar, dll)
+  // berubah, supaya broadcast full-state basi dari perangkat lain tidak
+  // pernah diam-diam menimpa perubahan yang lebih baru - lihat
+  // mergeBoxesByRecency di App.tsx dan pickBoxContentBase di server.ts.
   contentUpdatedAt?: string;
 }
 
@@ -363,9 +376,6 @@ export interface StockMutation {
   createdAt: string;
 }
 
-// ==================== ANTREAN RANAP (RAWAT INAP) - SIDEBAR ====================
-// Antrean terpisah dari `PatientItem`/kotak antrean supaya TIDAK ikut dihitung
-// oleh Respon Time (computeResponseTimeAnalytics hanya membaca `patients`).
 export type RanapCategory = 'fisio' | 'okupasi' | 'wicara';
 
 export interface RanapQueueItem {
@@ -376,11 +386,11 @@ export interface RanapQueueItem {
   roomNumber: string; // No. Ruangan, mis. "3", "4A" - dipakai untuk urutan otomatis
   diagnosis?: string;
   note?: string;
-  officerName?: string; // Terapis yang menangani / menginput
-  createdAt: string; // ISO string
+  officerName?: string;
+  createdAt: string;
 }
 
 export interface RanapHistoryItem extends RanapQueueItem {
-  completedAt: string; // ISO string saat diceklis selesai
+  completedAt: string;
 }
 

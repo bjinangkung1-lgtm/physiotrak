@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueueBox, PatientItem, RanapQueueItem } from '../types';
-import {
+import { 
   X,
   Sparkles,
   FileText,
@@ -27,6 +27,7 @@ interface TherapistSidebarProps {
   onClose: () => void;
   boxes?: QueueBox[];
   patients?: PatientItem[];
+  ranapQueue?: RanapQueueItem[];
   selectedBoxId?: string | null;
   onSelectBox?: (boxId: string | null) => void;
   onCallNextInBox?: (box: QueueBox) => void;
@@ -40,13 +41,9 @@ interface TherapistSidebarProps {
   onOpenInventory?: () => void;
   onOpenLainLain?: (tab?: 'kas' | 'rotasi' | 'sabtu' | 'cuti') => void;
   onOpenSop?: () => void;
+  onOpenRanapQueue?: () => void;
   avgWaitMinutes?: number;
   overloadCount?: number;
-  // Antrean Ranap (rawat inap) - satu link saja di sidebar, sistemnya
-  // sendiri dibuka lewat modal terpisah (RanapQueueModal) supaya sidebar
-  // tetap rapi.
-  ranapQueue?: RanapQueueItem[];
-  onOpenRanapQueue?: () => void;
 }
 
 export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
@@ -54,6 +51,7 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
   onClose,
   boxes = [],
   patients = [],
+  ranapQueue = [],
   onOpenDailyDatabase,
   onOpenReport,
   onOpenMonthlyReport,
@@ -62,15 +60,13 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
   onOpenInventory,
   onOpenLainLain,
   onOpenSop,
+  onOpenRanapQueue,
   avgWaitMinutes = 0,
   overloadCount = 0,
-  ranapQueue = [],
-  onOpenRanapQueue,
 }) => {
   const handleActionClick = (action?: () => void) => {
     if (action) {
       action();
-      // Auto close sidebar on smaller viewports for seamless transition
       if (window.innerWidth < 1024) {
         onClose();
       }
@@ -125,10 +121,6 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
 
         {/* Scrollable Body Navigation Links */}
         <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
-          {/* ANTREAN RANAP (RAWAT INAP) - satu link saja supaya sidebar tetap
-              rapi; klik untuk masuk ke sistem antrean ranap (modal
-              terpisah). Terpisah dari kotak antrean supaya tidak
-              mengganggu perhitungan Respon Time. */}
           {onOpenRanapQueue && (
             <button
               onClick={() => handleActionClick(onOpenRanapQueue)}

@@ -7,10 +7,10 @@ import { playChimeSound } from './utils/audio';
 import { Header } from './components/Header';
 import { QueueBoxCard } from './components/QueueBoxCard';
 import { AddPatientModal } from './components/AddPatientModal';
-import { AddBoxModal } from './components/AddBoxModal';
 import { RanapQueueModal } from './components/RanapQueueModal';
 import { AddRanapPatientModal } from './components/AddRanapPatientModal';
 import { RanapHistoryModal } from './components/RanapHistoryModal';
+import { AddBoxModal } from './components/AddBoxModal';
 import { EditBoxModal } from './components/EditBoxModal';
 import { CallHistoryModal } from './components/CallHistoryModal';
 import { MonthlyReportModal } from './components/MonthlyReportModal';
@@ -33,13 +33,13 @@ import { ChangeAppPasswordModal } from './components/ChangeAppPasswordModal';
 import { isAppAuthenticated, lockApp, syncAppPasswordFromCloud, fetchAppPasswordFromCloud } from './utils/appAuthService';
 import { syncDatabasePasswordFromCloud, fetchDatabasePasswordFromCloud, databaseService } from './utils/databaseService';
 import { computeResponseTimeAnalytics } from './utils/responseTimeAnalytics';
+import { compareRoomNumbers } from './utils/ranapQueueUtils';
 import { Pin, Sparkles, AlertCircle, X } from 'lucide-react';
 import { realtimeSync } from './utils/syncService';
 import { cloudDatabaseService } from './utils/cloudDatabaseService';
 
 import { getTherapistCategory, getCanonicalTherapistKey } from './utils/savedOfficersService';
 import { getJemputanActionDurationMinutes } from './utils/jemputanTimerService';
-import { RANAP_CATEGORY_SHORT_LABELS } from './utils/ranapQueueUtils';
 import { getActionTokensOrFallback, getRemainingActionTokens } from './utils/actionCodeUtils';
 
 export const normalizeAndMergeBoxes = (rawList: any[]): QueueBox[] => {
@@ -399,21 +399,6 @@ export default function App() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Antrean Ranap (rawat inap) - sidebar, terpisah dari `patients` supaya
-  // TIDAK ikut dihitung oleh Respon Time kotak antrean.
-  const [ranapQueue, setRanapQueue] = useState<RanapQueueItem[]>(() => {
-    try {
-      const saved = localStorage.getItem('antrian_ranap_queue');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [isRanapQueueOpen, setIsRanapQueueOpen] = useState(false);
-  const [isAddRanapPatientOpen, setIsAddRanapPatientOpen] = useState(false);
-  const [addRanapCategory, setAddRanapCategory] = useState<RanapCategory>('fisio');
-  const [isRanapHistoryOpen, setIsRanapHistoryOpen] = useState(false);
-
   // Filters & Controls
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed' | 'warning'>('all');
@@ -431,6 +416,19 @@ export default function App() {
   // Modals state
   const [isAddPatientOpen, setIsAddPatientOpen] = useState(false);
   const [addPatientBoxId, setAddPatientBoxId] = useState<string | undefined>(undefined);
+  const [isRanapQueueOpen, setIsRanapQueueOpen] = useState(false);
+  const [isAddRanapPatientOpen, setIsAddRanapPatientOpen] = useState(false);
+  const [addRanapDefaultCategory, setAddRanapDefaultCategory] = useState<RanapCategory>('fisio');
+  const [isRanapHistoryOpen, setIsRanapHistoryOpen] = useState(false);
+  const [ranapQueue, setRanapQueue] = useState<RanapQueueItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('antrian_ranap_queue');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const deletedRanapIdsRef = React.useRef<string[]>([]);
   const [isDailyDatabaseOpen, setIsDailyDatabaseOpen] = useState(false);
   const [isAddBoxOpen, setIsAddBoxOpen] = useState(false);
   const [editingBox, setEditingBox] = useState<QueueBox | null>(null);
@@ -595,6 +593,7 @@ export default function App() {
     realtimeSync.broadcastState({
       boxes: newBoxes,
       patients,
+      ranapQueue,
       callLogs,
       notifications,
       currentCallingPatient,
@@ -635,7 +634,6 @@ export default function App() {
   const lastAnnouncedCallRef = React.useRef<string | null>(null);
   const deletedPatientIdsRef = React.useRef<string[]>([]);
   const deletedBoxIdsRef = React.useRef<string[]>([]);
-  const deletedRanapIdsRef = React.useRef<string[]>([]);
   const broadcastDebounceTimerRef = React.useRef<NodeJS.Timeout | null>(null);
 
   // Check URL query parameters on startup (e.g. ?mode=tv)
@@ -666,16 +664,22 @@ export default function App() {
       isRemoteSyncRef.current = true;
       isHydratedRef.current = true;
 
-      // Antrean Ranap disinkronkan terpisah dari `patients` dan TIDAK ikut
-      // dihapus oleh reset antrean harian (lihat isResetEvent di bawah) -
-      // pasien ranap bisa berhari-hari, bukan bagian antrean walk-in harian.
-      if (Array.isArray(syncData.ranapQueue)) {
-        const deletedRanapSet = new Set(syncData.deletedRanapIds || []);
+      // Reconcile Ranap Queue first so that explicit reset of walk-in queue NEVER clears ranapQueue
+      if (syncData.ranapQueue && Array.isArray(syncData.ranapQueue)) {
         setRanapQueue(prev => {
+          const deletedSet = new Set(deletedRanapIdsRef.current);
+          if (Array.isArray(syncData.deletedRanapIds)) {
+            syncData.deletedRanapIds.forEach(id => deletedSet.add(id));
+          }
           const map = new Map<string, RanapQueueItem>();
-          prev.forEach(r => { if (!deletedRanapSet.has(r.id)) map.set(r.id, r); });
-          syncData.ranapQueue!.forEach((r: RanapQueueItem) => { if (!deletedRanapSet.has(r.id)) map.set(r.id, r); });
-          const merged = Array.from(map.values());
+          prev.forEach(r => { if (r && r.id && !deletedSet.has(r.id)) map.set(r.id, r); });
+          syncData.ranapQueue!.forEach(r => {
+            if (r && r.id && !deletedSet.has(r.id)) {
+              const ex = map.get(r.id);
+              map.set(r.id, ex ? { ...ex, ...r } : r);
+            }
+          });
+          const merged = Array.from(map.values()).sort((a, b) => compareRoomNumbers(a.roomNumber, b.roomNumber));
           return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
         });
       }
@@ -837,17 +841,6 @@ export default function App() {
         updateBoxOrderWatermarkIfNewer(cloudState.boxOrderUpdatedAt);
       }
 
-      if (Array.isArray(cloudState.ranapQueue)) {
-        const deletedRanapSet = new Set(cloudState.deletedRanapIds || []);
-        setRanapQueue(prev => {
-          const map = new Map<string, RanapQueueItem>();
-          prev.forEach(r => { if (!deletedRanapSet.has(r.id)) map.set(r.id, r); });
-          cloudState.ranapQueue!.forEach((r: RanapQueueItem) => { if (!deletedRanapSet.has(r.id)) map.set(r.id, r); });
-          const merged = Array.from(map.values());
-          return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
-        });
-      }
-
       const cloudResetEpoch = cloudState.lastResetAt ? new Date(cloudState.lastResetAt).getTime() : 0;
       const validCloudPatients = (cloudState.patients || []).filter(p => {
         if (!p || !p.id) return false;
@@ -857,6 +850,16 @@ export default function App() {
         }
         return true;
       });
+
+      if (Array.isArray(cloudState.ranapQueue) && cloudState.ranapQueue.length > 0) {
+        const deletedRanapSet = new Set(cloudState.deletedRanapIds || []);
+        setRanapQueue(prev => {
+          const map = new Map<string, RanapQueueItem>();
+          prev.forEach(r => { if (r && r.id && !deletedRanapSet.has(r.id)) map.set(r.id, r); });
+          cloudState.ranapQueue!.forEach(r => { if (r && r.id && !deletedRanapSet.has(r.id)) map.set(r.id, r); });
+          return Array.from(map.values()).sort((a, b) => compareRoomNumbers(a.roomNumber, b.roomNumber));
+        });
+      }
 
       const isCloudExplicitReset = Boolean(
         (cloudState.isExplicitReset || cloudState.resetConfirmed || cloudState.lastResetAt) &&
@@ -915,6 +918,7 @@ export default function App() {
           body: JSON.stringify({
             boxes: Array.isArray(cloudState.boxes) ? normalizeAndMergeBoxes(cloudState.boxes) : boxes,
             patients: validCloudPatients,
+            ranapQueue: cloudState.ranapQueue || [],
             callLogs: cloudState.callLogs || [],
             notifications: cloudState.notifications || [],
             lastResetAt: cloudState.lastResetAt || null,
@@ -949,17 +953,6 @@ export default function App() {
             updateBoxOrderWatermarkIfNewer(data.state.boxOrderUpdatedAt);
           }
 
-          if (Array.isArray(data.state.ranapQueue)) {
-            const deletedRanapSet = new Set(data.state.deletedRanapIds || []);
-            setRanapQueue(prev => {
-              const map = new Map<string, RanapQueueItem>();
-              prev.forEach(r => { if (!deletedRanapSet.has(r.id)) map.set(r.id, r); });
-              data.state.ranapQueue!.forEach((r: RanapQueueItem) => { if (!deletedRanapSet.has(r.id)) map.set(r.id, r); });
-              const merged = Array.from(map.values());
-              return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
-            });
-          }
-
           if (data.state.lastResetAt) {
             try {
               localStorage.setItem('antrian_last_reset_at', data.state.lastResetAt);
@@ -978,15 +971,21 @@ export default function App() {
             return true;
           });
 
-          // PENTING: jangan pernah anggap array pasien kosong SENDIRIAN sebagai
-          // tanda reset - itu juga persis kondisi server yang baru cold-start
-          // dan "amnesia" (queue_store.json hilang karena disk lokal ephemeral,
-          // lihat hydrateStateFromFirestoreIfNeeded). Kalau ini dianggap reset,
-          // device langsung menghapus localStorage & state pasiennya SENDIRI -
-          // yang justru satu-satunya salinan yang masih benar saat itu - membuat
-          // antrean tampak kosong total padahal tidak ada yang menekan reset.
-          // Pola ini sudah benar di 2 tempat lain (SSE & Cloud Firestore hydrate
-          // di atas): butuh isExplicitReset/resetConfirmed, bukan sekadar kosong.
+          if (Array.isArray(data.state.ranapQueue) && data.state.ranapQueue.length > 0) {
+            const deletedRanapSet = new Set(data.state.deletedRanapIds || []);
+            setRanapQueue(prev => {
+              const map = new Map<string, RanapQueueItem>();
+              prev.forEach(r => { if (r && r.id && !deletedRanapSet.has(r.id)) map.set(r.id, r); });
+              data.state.ranapQueue.forEach((r: any) => {
+                if (r && r.id && !deletedRanapSet.has(r.id)) {
+                  const ex = map.get(r.id);
+                  map.set(r.id, ex ? { ...ex, ...r } : r);
+                }
+              });
+              return Array.from(map.values()).sort((a, b) => compareRoomNumbers(a.roomNumber, b.roomNumber));
+            });
+          }
+
           const isServerReset = Boolean(
             data.state.isExplicitReset ||
             data.state.resetConfirmed
@@ -1085,59 +1084,12 @@ export default function App() {
     setBoxes(prev => prev.map(b => b.id === stamped.id ? stamped : b));
   };
 
-  // ==================== ANTREAN RANAP (SIDEBAR) ====================
-  // Antrean terpisah dari `patients` - lihat catatan di types.ts/RanapQueueItem.
-  // Urutan tampil selalu dihitung ulang (sortRanapQueue) berdasarkan divisi
-  // (Fisio -> Okupasi -> Wicara) lalu nomor ruangan menaik, jadi pasien baru
-  // otomatis masuk ke posisi yang benar tanpa perlu diurutkan manual.
-  const handleAddRanapPatient = (data: Omit<RanapQueueItem, 'id' | 'createdAt'>) => {
-    hasLocalMutationRef.current = true;
-    const newItem: RanapQueueItem = {
-      ...data,
-      id: generateUniqueId('ranap'),
-      createdAt: new Date().toISOString(),
-    };
-    setRanapQueue(prev => [...prev, newItem]);
-    showAppToast(`Pasien ranap "${data.patientName}" ditambahkan ke Antrean ${RANAP_CATEGORY_SHORT_LABELS[data.category]}.`);
-  };
-
-  const handleUpdateRanapPatient = (updated: RanapQueueItem) => {
-    hasLocalMutationRef.current = true;
-    setRanapQueue(prev => prev.map(r => r.id === updated.id ? updated : r));
-  };
-
-  const handleDeleteRanapPatient = (id: string) => {
-    hasLocalMutationRef.current = true;
-    deletedRanapIdsRef.current.push(id);
-    setRanapQueue(prev => prev.filter(r => r.id !== id));
-  };
-
-  // Diceklis selesai: keluar dari antrean aktif & diarsipkan ke riwayat
-  // (ranap_history.json + Cloud Firestore) supaya jadi informasi di lain hari.
-  const handleCompleteRanapPatient = (id: string) => {
-    hasLocalMutationRef.current = true;
-    const target = ranapQueue.find(r => r.id === id);
-    if (!target) return;
-
-    deletedRanapIdsRef.current.push(id);
-    setRanapQueue(prev => prev.filter(r => r.id !== id));
-
-    const historyItem: RanapHistoryItem = {
-      ...target,
-      completedAt: new Date().toISOString(),
-    };
-    databaseService.saveRanapHistoryItem(historyItem).catch(err =>
-      console.warn('Gagal menyimpan riwayat antrean ranap:', err)
-    );
-    showAppToast(`Pasien ranap "${target.patientName}" selesai & dipindahkan ke riwayat.`);
-  };
-
   // Broadcast local changes to all connected devices ONLY when triggered locally AND after hydration
   useEffect(() => {
     localStorage.setItem('antrian_boxes', JSON.stringify(boxes));
     localStorage.setItem('antrian_patients', JSON.stringify(patients));
-    localStorage.setItem('antrian_call_logs', JSON.stringify(callLogs));
     localStorage.setItem('antrian_ranap_queue', JSON.stringify(ranapQueue));
+    localStorage.setItem('antrian_call_logs', JSON.stringify(callLogs));
 
     // CRITICAL FIX: Do NOT broadcast to backend if we haven't completed initial hydration or if no local user mutation occurred!
     if (!isHydratedRef.current) {
@@ -1173,9 +1125,9 @@ export default function App() {
       realtimeSync.broadcastState({
         boxes,
         patients,
+        ranapQueue,
         callLogs,
         notifications,
-        ranapQueue,
         currentCallingPatient,
         currentCallingBox,
         boxOrderUpdatedAt: boxOrderUpdatedAtRef.current || undefined,
@@ -1186,7 +1138,76 @@ export default function App() {
         deletedRanapIds: deletedR,
       });
     }, 250);
-  }, [boxes, patients, callLogs, notifications, ranapQueue, currentCallingPatient, currentCallingBox]);
+  }, [boxes, patients, ranapQueue, callLogs, notifications, currentCallingPatient, currentCallingBox]);
+
+  // Antrean Ranap Handlers
+  const handleOpenAddRanap = (category: RanapCategory = 'fisio') => {
+    setAddRanapDefaultCategory(category);
+    setIsAddRanapPatientOpen(true);
+  };
+
+  const handleAddRanapPatient = (data: Omit<RanapQueueItem, 'id' | 'createdAt'>) => {
+    const newRanapItem: RanapQueueItem = {
+      ...data,
+      id: `ranap-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      createdAt: new Date().toISOString(),
+    };
+    hasLocalMutationRef.current = true;
+    setRanapQueue(prev => {
+      const updated = [...prev, newRanapItem].sort((a, b) => compareRoomNumbers(a.roomNumber, b.roomNumber));
+      try {
+        localStorage.setItem('antrian_ranap_queue', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    showAppToast(`Pasien ${newRanapItem.patientName} berhasil ditambahkan ke antrean ranap (Ruang ${newRanapItem.roomNumber})`);
+  };
+
+  const handleCompleteRanapPatient = async (id: string) => {
+    const target = ranapQueue.find(r => r.id === id);
+    if (!target) return;
+
+    const completedHistoryItem: RanapHistoryItem = {
+      ...target,
+      completedAt: new Date().toISOString(),
+    };
+
+    // Save to permanent history backend API
+    databaseService.saveRanapHistoryItem(completedHistoryItem).catch(err => {
+      console.warn('Failed to save completed ranap history:', err);
+    });
+
+    // Remove from active queue
+    deletedRanapIdsRef.current.push(id);
+    hasLocalMutationRef.current = true;
+    setRanapQueue(prev => {
+      const updated = prev.filter(r => r.id !== id);
+      try {
+        localStorage.setItem('antrian_ranap_queue', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    confetti({
+      particleCount: 40,
+      spread: 60,
+      origin: { y: 0.8 }
+    });
+    showAppToast(`Tindakan Ranap ${target.patientName} (Ruang ${target.roomNumber}) selesai & tersimpan di Riwayat.`);
+  };
+
+  const handleDeleteRanapPatient = (id: string) => {
+    deletedRanapIdsRef.current.push(id);
+    hasLocalMutationRef.current = true;
+    setRanapQueue(prev => {
+      const updated = prev.filter(r => r.id !== id);
+      try {
+        localStorage.setItem('antrian_ranap_queue', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    showAppToast('Antrean ranap berhasil dihapus.');
+  };
 
   // Handle Calling a Patient
   const handleCallPatient = (patient: PatientItem, box: QueueBox) => {
@@ -1270,8 +1291,11 @@ export default function App() {
       medicalRecordNo: target.medicalRecordNo,
       patientName: target.patientName,
       boxId: target.boxId,
-      boxTitle: targetBoxForArchive ? targetBoxForArchive.title : target.boxId,
-      officerName: targetBoxForArchive ? targetBoxForArchive.officerName : '',
+      boxTitle: target.boxTitle || (targetBoxForArchive ? targetBoxForArchive.title : target.boxId),
+      officerName: target.officerName || (targetBoxForArchive ? targetBoxForArchive.officerName : ''),
+      category: target.category || (targetBoxForArchive ? targetBoxForArchive.category : 'fisio'),
+      firstOfficerName: target.firstOfficerName,
+      firstBoxTitle: target.firstBoxTitle,
       queueNumber: target.queueNumber || '',
       actionCode: target.actionCode || '',
       diagnosis: target.diagnosis || '',
@@ -1519,6 +1543,8 @@ export default function App() {
     const newPatient: PatientItem = {
       ...patientData,
       id: generateUniqueId('pat'),
+      boxTitle: targetBox ? targetBox.title : patientData.boxId,
+      officerName: targetBox ? targetBox.officerName : '',
       category: targetCategory,
       firstOfficerName: firstOfficer,
       firstBoxTitle: firstBoxTitle,
@@ -1880,6 +1906,7 @@ export default function App() {
     realtimeSync.broadcastState({
       boxes,
       patients: remainingPatients,
+      ranapQueue,
       callLogs,
       notifications,
       currentCallingPatient: nextCallingPatient,
@@ -1899,8 +1926,11 @@ export default function App() {
       medicalRecordNo: p.medicalRecordNo,
       patientName: p.patientName,
       boxId: p.boxId,
-      boxTitle: targetBox ? targetBox.title : p.boxId,
-      officerName: targetBox ? targetBox.officerName : '',
+      boxTitle: p.boxTitle || (targetBox ? targetBox.title : p.boxId),
+      officerName: p.officerName || (targetBox ? targetBox.officerName : ''),
+      category: p.category || (targetBox ? targetBox.category : 'fisio'),
+      firstOfficerName: p.firstOfficerName,
+      firstBoxTitle: p.firstBoxTitle,
       queueNumber: p.queueNumber || '',
       actionCode: p.actionCode || '',
       diagnosis: p.diagnosis || '',
@@ -1967,8 +1997,11 @@ export default function App() {
           medicalRecordNo: p.medicalRecordNo,
           patientName: p.patientName,
           boxId: p.boxId,
-          boxTitle: targetBox ? targetBox.title : p.boxId,
-          officerName: targetBox ? targetBox.officerName : '',
+          boxTitle: p.boxTitle || (targetBox ? targetBox.title : p.boxId),
+          officerName: p.officerName || (targetBox ? targetBox.officerName : ''),
+          category: p.category || (targetBox ? targetBox.category : 'fisio'),
+          firstOfficerName: p.firstOfficerName,
+          firstBoxTitle: p.firstBoxTitle,
           queueNumber: p.queueNumber || '',
           actionCode: p.actionCode || '',
           diagnosis: p.diagnosis || '',
@@ -2021,6 +2054,7 @@ export default function App() {
     realtimeSync.broadcastState({
       boxes,
       patients: [],
+      ranapQueue,
       callLogs: [],
       notifications: [],
       currentCallingPatient: null,
@@ -2190,6 +2224,7 @@ export default function App() {
         onClose={() => setIsTherapistSidebarOpen(false)}
         boxes={boxes}
         patients={patients}
+        ranapQueue={ranapQueue}
         selectedBoxId={selectedTherapistBoxId}
         onSelectBox={(bId) => {
           setSelectedTherapistBoxId(bId);
@@ -2211,10 +2246,9 @@ export default function App() {
           setIsLainLainOpen(true);
         }}
         onOpenSop={() => setIsSopOpen(true)}
+        onOpenRanapQueue={() => setIsRanapQueueOpen(true)}
         avgWaitMinutes={globalResponseAnalytics.avgWaitMinutes}
         overloadCount={overloadedTherapistsCount}
-        ranapQueue={ranapQueue}
-        onOpenRanapQueue={() => setIsRanapQueueOpen(true)}
       />
 
       {/* Top Header */}
@@ -2552,18 +2586,12 @@ export default function App() {
         onAddPatient={handleAddPatient}
       />
 
-      <AddBoxModal
-        isOpen={isAddBoxOpen}
-        onClose={() => setIsAddBoxOpen(false)}
-        onAddBox={handleAddBox}
-      />
-
       <RanapQueueModal
         isOpen={isRanapQueueOpen}
         onClose={() => setIsRanapQueueOpen(false)}
         ranapQueue={ranapQueue}
         onOpenAddPatient={(category) => {
-          setAddRanapCategory(category);
+          setAddRanapDefaultCategory(category);
           setIsAddRanapPatientOpen(true);
         }}
         onCompletePatient={handleCompleteRanapPatient}
@@ -2574,13 +2602,19 @@ export default function App() {
       <AddRanapPatientModal
         isOpen={isAddRanapPatientOpen}
         onClose={() => setIsAddRanapPatientOpen(false)}
-        defaultCategory={addRanapCategory}
+        defaultCategory={addRanapDefaultCategory}
         onAddPatient={handleAddRanapPatient}
       />
 
       <RanapHistoryModal
         isOpen={isRanapHistoryOpen}
         onClose={() => setIsRanapHistoryOpen(false)}
+      />
+
+      <AddBoxModal
+        isOpen={isAddBoxOpen}
+        onClose={() => setIsAddBoxOpen(false)}
+        onAddBox={handleAddBox}
       />
 
       <EditBoxModal

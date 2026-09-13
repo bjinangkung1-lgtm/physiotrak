@@ -26,11 +26,6 @@ const firestoreDatabaseId = (firebaseConfig as any).firestoreDatabaseId && (fire
   : undefined;
 const serverFirestoreDb = getFirestore(firebaseServerApp, firestoreDatabaseId);
 const QUEUE_STATE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'current_queue');
-// Cadangan untuk daily_archive.json (dipakai Laporan Harian & Laporan Bulanan
-// per terapis) dan patients_master.json (database pasien/autocomplete).
-// Sebelumnya HANYA queue_store.json yang punya cadangan+pemulihan Firestore -
-// kedua file ini tidak sama sekali, jadi setiap kali instance di-recycle
-// (disk lokal hilang) rekap bulanan & database pasien master ikut hilang.
 const DAILY_ARCHIVE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'daily_archive');
 const MASTER_PATIENTS_DOC_REF = doc(serverFirestoreDb, 'system_state', 'master_patients');
 const RANAP_HISTORY_DOC_REF = doc(serverFirestoreDb, 'system_state', 'ranap_history');
@@ -263,9 +258,6 @@ function saveMasterPatients(patients: any[]) {
   } catch (err) {
     console.error('Error writing MASTER_PATIENTS_FILE:', err);
   }
-  // Cadangkan ke Cloud Firestore di background supaya instance lain/instance
-  // yang baru dinyalakan ulang bisa memulihkan database pasien master walau
-  // disk lokalnya sendiri kosong (lihat hydrateMasterPatientsFromFirestoreIfNeeded).
   mirrorMasterPatientsToFirestore(patients);
 }
 
@@ -294,23 +286,15 @@ function saveDailyArchive(archive: Record<string, any[]>) {
   } catch (err) {
     console.error('Error writing DAILY_ARCHIVE_FILE:', err);
   }
-  // Cadangkan ke Cloud Firestore di background supaya instance lain/instance
-  // yang baru dinyalakan ulang bisa memulihkan rekap kunjungan harian & bulanan
-  // per terapis walau disk lokalnya sendiri kosong (lihat
-  // hydrateDailyArchiveFromFirestoreIfNeeded).
   mirrorDailyArchiveToFirestore(archive);
 }
 
-// Ranap History File Helpers (daftar RanapHistoryItem yang sudah diceklis
-// selesai dari Antrean Ranap sidebar - dipakai untuk "informasi di lain hari")
+// Ranap History File Helpers
 function loadRanapHistory(): any[] {
   try {
     if (fs.existsSync(RANAP_HISTORY_FILE)) {
-      const content = fs.readFileSync(RANAP_HISTORY_FILE, 'utf-8');
-      const parsed = JSON.parse(content);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
+      const parsed = JSON.parse(fs.readFileSync(RANAP_HISTORY_FILE, 'utf-8'));
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch (err) {
     console.error('Error reading RANAP_HISTORY_FILE:', err);
@@ -326,8 +310,6 @@ function saveRanapHistory(history: any[]) {
   } catch (err) {
     console.error('Error writing RANAP_HISTORY_FILE:', err);
   }
-  // Cadangkan ke Cloud Firestore di background supaya riwayat ranap tidak
-  // ikut hilang kalau instance di-recycle (lihat hydrateRanapHistoryFromFirestoreIfNeeded).
   mirrorRanapHistoryToFirestore(history);
 }
 
@@ -804,22 +786,12 @@ function saveSecurityConfig(data: { appPassword?: string; databasePassword?: str
 }
 
 // Helper: sync patient array to today's daily archive and update master patient visits
-function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
+function syncPatientsToMasterAndArchive(patients: any[]) {
   if (!Array.isArray(patients) || patients.length === 0) return;
 
   const today = getLocalDateStringWIB();
   const masterPatients = loadMasterPatients();
   const dailyArchive = loadDailyArchive();
-  // Peta boxId -> nama terapis/judul kotak PADA SAAT INI, dibekukan ke tiap
-  // arsip kunjungan (lihat officerName/boxTitle di bawah). Tanpa ini, Laporan
-  // Bulanan Terapis akan salah atribusi setiap kali sebuah kotak diganti nama/
-  // petugas atau dihapus (rotasi shift, penggantian terapis, dsb) - riwayat
-  // bulan lalu ikut berubah seolah dikerjakan terapis yang sekarang menempati
-  // boxId yang sama, padahal itu terapis yang berbeda.
-  const boxLookup = new Map<string, any>();
-  if (Array.isArray(boxes)) {
-    boxes.forEach((b) => { if (b && b.id) boxLookup.set(b.id, b); });
-  }
 
   let masterUpdated = false;
 
@@ -896,6 +868,8 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   // 2. ACCUMULATIVE Sync to Daily Archive for today (DO NOT OVERWRITE OR WIPE PREVIOUS PATIENTS OF TODAY)
   const existingVisits = dailyArchive[today] || [];
   const visitsMap = new Map<string, any>();
+  const currentStateForBoxes = loadStateFromFile();
+  const currentBoxes = (currentStateForBoxes && Array.isArray(currentStateForBoxes.boxes)) ? currentStateForBoxes.boxes : [];
 
   // Keep all existing visits recorded today
   existingVisits.forEach((v: any) => {
@@ -906,7 +880,8 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   patients.forEach((p) => {
     if (!p || !p.id || !p.patientName || !p.medicalRecordNo) return;
     const prev = visitsMap.get(p.id) || {};
-    const box = boxLookup.get(p.boxId);
+    const boxMatch = currentBoxes.find((b: any) => b.id === (p.boxId || prev.boxId));
+
     visitsMap.set(p.id, {
       ...prev,
       id: p.id,
@@ -915,11 +890,11 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
       medicalRecordNo: p.medicalRecordNo.trim(),
       patientName: p.patientName.trim(),
       boxId: p.boxId || prev.boxId || 'box-1',
-      // Simpan snapshot nama terapis & judul kotak - JANGAN pernah menimpa
-      // dengan string kosong kalau box sudah tidak ada lagi (mis. dihapus di
-      // kunjungan berikutnya); pertahankan snapshot yang sudah tersimpan.
-      officerName: (box && box.officerName) || prev.officerName || '',
-      boxTitle: (box && box.title) || prev.boxTitle || '',
+      boxTitle: p.boxTitle || prev.boxTitle || boxMatch?.title || p.boxId || '',
+      officerName: p.officerName || prev.officerName || boxMatch?.officerName || '',
+      category: p.category || prev.category || boxMatch?.category || '',
+      firstOfficerName: p.firstOfficerName || prev.firstOfficerName || '',
+      firstBoxTitle: p.firstBoxTitle || prev.firstBoxTitle || '',
       queueNumber: p.queueNumber || prev.queueNumber || '',
       actionCode: p.actionCode || prev.actionCode || '',
       diagnosis: p.diagnosis || prev.diagnosis || '',
@@ -942,20 +917,17 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
 // Debounced master patient & daily archive synchronization helper
 let masterArchiveDebounceTimer: NodeJS.Timeout | null = null;
 let pendingMasterArchivePatients: any[] | null = null;
-let pendingMasterArchiveBoxes: any[] | null = null;
 
-function scheduleSyncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
+function scheduleSyncPatientsToMasterAndArchive(patients: any[]) {
   pendingMasterArchivePatients = patients;
-  pendingMasterArchiveBoxes = boxes || pendingMasterArchiveBoxes;
   if (masterArchiveDebounceTimer) clearTimeout(masterArchiveDebounceTimer);
   masterArchiveDebounceTimer = setTimeout(() => {
     masterArchiveDebounceTimer = null;
     const toSync = pendingMasterArchivePatients;
-    const toSyncBoxes = pendingMasterArchiveBoxes;
     pendingMasterArchivePatients = null;
     if (toSync) {
       try {
-        syncPatientsToMasterAndArchive(toSync, toSyncBoxes || undefined);
+        syncPatientsToMasterAndArchive(toSync);
       } catch (err) {
         console.error('[MasterArchiveSync] Deferred sync error:', err);
       }
@@ -1457,6 +1429,23 @@ let isFirestoreMirrorDisabled = (() => {
 let mirrorDebounceTimer: NodeJS.Timeout | null = null;
 let pendingMirrorState: any = null;
 
+function handleFirestoreQuotaError(err: any, label: string): boolean {
+  const errMsg = err?.message || String(err);
+  const isQuotaError =
+    errMsg.includes('RESOURCE_EXHAUSTED') ||
+    errMsg.includes('Quota exceeded') ||
+    err?.code === 'resource-exhausted' ||
+    err?.code === 8;
+  if (isQuotaError) {
+    isFirestoreMirrorDisabled = true;
+    try { fs.writeFileSync(FIRESTORE_QUOTA_FLAG_FILE, Date.now().toString(), 'utf-8'); } catch {}
+    console.warn(`[${label}] Kuota Firestore habis, mirroring dinonaktifkan sementara.`);
+  } else {
+    console.warn(`[${label}] Gagal mencadangkan ke Cloud Firestore:`, err);
+  }
+  return isQuotaError;
+}
+
 async function mirrorStateToFirestore(state: any): Promise<void> {
   // If Firestore mirror is disabled due to quota exhaustion, exit immediately
   if (isFirestoreMirrorDisabled) {
@@ -1484,70 +1473,19 @@ async function mirrorStateToFirestore(state: any): Promise<void> {
         lastMirroredAt: new Date().toISOString(),
       });
     } catch (err: any) {
-      const errMsg = err?.message || String(err);
-      if (
-        errMsg.includes('RESOURCE_EXHAUSTED') ||
-        errMsg.includes('Quota exceeded') ||
-        err?.code === 'resource-exhausted' ||
-        err?.code === 8
-      ) {
-        // Disable cloud mirroring for the remainder of this session to prevent repeated gRPC stream retries
-        isFirestoreMirrorDisabled = true;
-        try {
-          fs.writeFileSync(FIRESTORE_QUOTA_FLAG_FILE, Date.now().toString(), 'utf-8');
-        } catch {
-          // ignore
-        }
-        console.warn(
-          '[FirestoreMirror] Kuota gratis harian Cloud Firestore telah mencapai batas (RESOURCE_EXHAUSTED). Cloud mirroring dinonaktifkan otomatis. Seluruh penyimpanan lokal, REST API, & SSE tetap berjalan 100% normal.'
-        );
-      } else {
-        console.warn('[FirestoreMirror] Gagal mencadangkan state antrian ke Cloud Firestore:', err);
-      }
+      handleFirestoreQuotaError(err, 'FirestoreMirror');
     }
   }, 5000);
 }
 
-// Helper bersama untuk mendeteksi error kuota Firestore & menonaktifkan mirroring
-// sementara (dipakai oleh ketiga mirror: queue state, daily archive, master patients).
-function handleFirestoreQuotaError(err: any, label: string): boolean {
-  const errMsg = err?.message || String(err);
-  const isQuotaError =
-    errMsg.includes('RESOURCE_EXHAUSTED') ||
-    errMsg.includes('Quota exceeded') ||
-    err?.code === 'resource-exhausted' ||
-    err?.code === 8;
-  if (isQuotaError) {
-    isFirestoreMirrorDisabled = true;
-    try {
-      fs.writeFileSync(FIRESTORE_QUOTA_FLAG_FILE, Date.now().toString(), 'utf-8');
-    } catch {
-      // ignore
-    }
-    console.warn(
-      `[${label}] Kuota gratis harian Cloud Firestore telah mencapai batas (RESOURCE_EXHAUSTED). Cloud mirroring dinonaktifkan otomatis. Seluruh penyimpanan lokal, REST API, & SSE tetap berjalan 100% normal.`
-    );
-  } else {
-    console.warn(`[${label}] Gagal mencadangkan ke Cloud Firestore:`, err);
-  }
-  return isQuotaError;
-}
-
-// daily_archive.json (dipakai Laporan Harian & Laporan Bulanan per terapis) sebelumnya
-// TIDAK punya cadangan Firestore sama sekali - hanya queue_store.json yang punya. Jadi
-// setiap kali instance di-recycle oleh platform hosting (disk lokal ephemeral hilang),
-// seluruh rekap kunjungan harian/bulanan yang terbentuk otomatis dari sinkronisasi
-// antrean (bukan lewat aksi eksplisit per-kunjungan) hilang permanen tanpa jejak.
+// Mirror & Hydrate for Daily Archive (Laporan Harian & Bulanan per Terapis)
 let dailyArchiveMirrorDebounceTimer: NodeJS.Timeout | null = null;
 let pendingDailyArchiveMirror: Record<string, any[]> | null = null;
 
 async function mirrorDailyArchiveToFirestore(archive: Record<string, any[]>): Promise<void> {
   if (isFirestoreMirrorDisabled) return;
   pendingDailyArchiveMirror = archive;
-
-  if (dailyArchiveMirrorDebounceTimer) {
-    clearTimeout(dailyArchiveMirrorDebounceTimer);
-  }
+  if (dailyArchiveMirrorDebounceTimer) clearTimeout(dailyArchiveMirrorDebounceTimer);
   dailyArchiveMirrorDebounceTimer = setTimeout(async () => {
     dailyArchiveMirrorDebounceTimer = null;
     if (isFirestoreMirrorDisabled) return;
@@ -1555,10 +1493,7 @@ async function mirrorDailyArchiveToFirestore(archive: Record<string, any[]>): Pr
     if (!current) return;
     try {
       const sanitized = JSON.parse(JSON.stringify(current));
-      await setDoc(DAILY_ARCHIVE_DOC_REF, {
-        archive: sanitized,
-        lastMirroredAt: new Date().toISOString(),
-      });
+      await setDoc(DAILY_ARCHIVE_DOC_REF, { archive: sanitized, lastMirroredAt: new Date().toISOString() });
     } catch (err: any) {
       handleFirestoreQuotaError(err, 'DailyArchiveMirror');
     }
@@ -1570,42 +1505,29 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
     if (fs.existsSync(DAILY_ARCHIVE_FILE)) {
       try {
         const raw = JSON.parse(fs.readFileSync(DAILY_ARCHIVE_FILE, 'utf-8'));
-        if (raw && typeof raw === 'object' && Object.keys(raw).length > 0) {
-          return;
-        }
-      } catch {
-        // file corrupt, lanjutkan hydrate
-      }
+        if (raw && typeof raw === 'object' && Object.keys(raw).length > 0) return;
+      } catch {}
     }
-
     const snapshot = await getDoc(DAILY_ARCHIVE_DOC_REF);
     if (!snapshot.exists()) return;
-
     const cloudArchive = snapshot.data()?.archive;
     if (cloudArchive && typeof cloudArchive === 'object' && Object.keys(cloudArchive).length > 0) {
-      console.log(`[FirestoreHydrate] daily_archive.json lokal kosong (kemungkinan instance baru/di-restart). Memulihkan ${Object.keys(cloudArchive).length} tanggal arsip dari cadangan Cloud Firestore.`);
+      console.log(`[FirestoreHydrate] Memulihkan ${Object.keys(cloudArchive).length} tanggal arsip dari Firestore.`);
       safeAtomicWriteJson(DAILY_ARCHIVE_FILE, cloudArchive);
     }
   } catch (err) {
-    console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive dari Cloud Firestore, melanjutkan dengan state lokal:', err);
+    console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive:', err);
   }
 }
 
-// patients_master.json (database pasien untuk autocomplete & rekam medis) - sama seperti
-// daily archive, jalur registrasi otomatis (syncPatientsToMasterAndArchive, dipanggil di
-// setiap update antrean) sebelumnya tidak punya cadangan Firestore-nya sendiri. Client punya
-// self-heal 3-arah (server+local+cloud) yang bisa menutupi ini SETELAH seseorang membuka
-// tampilan yang memuat master pasien, tapi sebelum itu terjadi data di server tetap kosong.
+// Mirror & Hydrate for Master Patients (Database Pasien)
 let masterPatientsMirrorDebounceTimer: NodeJS.Timeout | null = null;
 let pendingMasterPatientsMirror: any[] | null = null;
 
 async function mirrorMasterPatientsToFirestore(patients: any[]): Promise<void> {
   if (isFirestoreMirrorDisabled) return;
   pendingMasterPatientsMirror = patients;
-
-  if (masterPatientsMirrorDebounceTimer) {
-    clearTimeout(masterPatientsMirrorDebounceTimer);
-  }
+  if (masterPatientsMirrorDebounceTimer) clearTimeout(masterPatientsMirrorDebounceTimer);
   masterPatientsMirrorDebounceTimer = setTimeout(async () => {
     masterPatientsMirrorDebounceTimer = null;
     if (isFirestoreMirrorDisabled) return;
@@ -1613,10 +1535,7 @@ async function mirrorMasterPatientsToFirestore(patients: any[]): Promise<void> {
     if (!current) return;
     try {
       const sanitized = JSON.parse(JSON.stringify(current));
-      await setDoc(MASTER_PATIENTS_DOC_REF, {
-        patients: sanitized,
-        lastMirroredAt: new Date().toISOString(),
-      });
+      await setDoc(MASTER_PATIENTS_DOC_REF, { patients: sanitized, lastMirroredAt: new Date().toISOString() });
     } catch (err: any) {
       handleFirestoreQuotaError(err, 'MasterPatientsMirror');
     }
@@ -1628,39 +1547,29 @@ async function hydrateMasterPatientsFromFirestoreIfNeeded(): Promise<void> {
     if (fs.existsSync(MASTER_PATIENTS_FILE)) {
       try {
         const raw = JSON.parse(fs.readFileSync(MASTER_PATIENTS_FILE, 'utf-8'));
-        if (Array.isArray(raw) && raw.length > 0) {
-          return;
-        }
-      } catch {
-        // file corrupt, lanjutkan hydrate
-      }
+        if (Array.isArray(raw) && raw.length > 0) return;
+      } catch {}
     }
-
     const snapshot = await getDoc(MASTER_PATIENTS_DOC_REF);
     if (!snapshot.exists()) return;
-
     const cloudPatients = snapshot.data()?.patients;
     if (Array.isArray(cloudPatients) && cloudPatients.length > 0) {
-      console.log(`[FirestoreHydrate] patients_master.json lokal kosong (kemungkinan instance baru/di-restart). Memulihkan ${cloudPatients.length} data pasien master dari cadangan Cloud Firestore.`);
+      console.log(`[FirestoreHydrate] Memulihkan ${cloudPatients.length} master pasien dari Firestore.`);
       safeAtomicWriteJson(MASTER_PATIENTS_FILE, cloudPatients);
     }
   } catch (err) {
-    console.warn('[FirestoreHydrate] Gagal memulihkan patients_master dari Cloud Firestore, melanjutkan dengan state lokal:', err);
+    console.warn('[FirestoreHydrate] Gagal memulihkan master_patients:', err);
   }
 }
 
-// ranap_history.json (riwayat pasien Antrean Ranap yang sudah diceklis selesai,
-// dipakai untuk "informasi di lain hari") - mirror+hydrate dengan pola yang sama.
+// Mirror & Hydrate for Ranap History (Riwayat Antrean Rawat Inap)
 let ranapHistoryMirrorDebounceTimer: NodeJS.Timeout | null = null;
 let pendingRanapHistoryMirror: any[] | null = null;
 
 async function mirrorRanapHistoryToFirestore(history: any[]): Promise<void> {
   if (isFirestoreMirrorDisabled) return;
   pendingRanapHistoryMirror = history;
-
-  if (ranapHistoryMirrorDebounceTimer) {
-    clearTimeout(ranapHistoryMirrorDebounceTimer);
-  }
+  if (ranapHistoryMirrorDebounceTimer) clearTimeout(ranapHistoryMirrorDebounceTimer);
   ranapHistoryMirrorDebounceTimer = setTimeout(async () => {
     ranapHistoryMirrorDebounceTimer = null;
     if (isFirestoreMirrorDisabled) return;
@@ -1668,10 +1577,7 @@ async function mirrorRanapHistoryToFirestore(history: any[]): Promise<void> {
     if (!current) return;
     try {
       const sanitized = JSON.parse(JSON.stringify(current));
-      await setDoc(RANAP_HISTORY_DOC_REF, {
-        history: sanitized,
-        lastMirroredAt: new Date().toISOString(),
-      });
+      await setDoc(RANAP_HISTORY_DOC_REF, { history: sanitized, lastMirroredAt: new Date().toISOString() });
     } catch (err: any) {
       handleFirestoreQuotaError(err, 'RanapHistoryMirror');
     }
@@ -1683,24 +1589,18 @@ async function hydrateRanapHistoryFromFirestoreIfNeeded(): Promise<void> {
     if (fs.existsSync(RANAP_HISTORY_FILE)) {
       try {
         const raw = JSON.parse(fs.readFileSync(RANAP_HISTORY_FILE, 'utf-8'));
-        if (Array.isArray(raw) && raw.length > 0) {
-          return;
-        }
-      } catch {
-        // file corrupt, lanjutkan hydrate
-      }
+        if (Array.isArray(raw) && raw.length > 0) return;
+      } catch {}
     }
-
     const snapshot = await getDoc(RANAP_HISTORY_DOC_REF);
     if (!snapshot.exists()) return;
-
     const cloudHistory = snapshot.data()?.history;
     if (Array.isArray(cloudHistory) && cloudHistory.length > 0) {
-      console.log(`[FirestoreHydrate] ranap_history.json lokal kosong (kemungkinan instance baru/di-restart). Memulihkan ${cloudHistory.length} riwayat ranap dari cadangan Cloud Firestore.`);
+      console.log(`[FirestoreHydrate] Memulihkan ${cloudHistory.length} riwayat ranap dari Firestore.`);
       safeAtomicWriteJson(RANAP_HISTORY_FILE, cloudHistory);
     }
   } catch (err) {
-    console.warn('[FirestoreHydrate] Gagal memulihkan ranap_history dari Cloud Firestore, melanjutkan dengan state lokal:', err);
+    console.warn('[FirestoreHydrate] Gagal memulihkan ranap_history:', err);
   }
 }
 
@@ -1758,17 +1658,15 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       callLogs: [],
       notifications: [],
       savedOfficers: Array.isArray(incomingPayload.savedOfficers) ? incomingPayload.savedOfficers : (existingState.savedOfficers || []),
-      // Antrean Ranap TIDAK ikut ter-reset oleh "Bersihkan Antrean" harian -
-      // pasien ranap bisa berhari-hari, jadi bukan bagian dari antrean walk-in
-      // harian yang di-reset di sini.
       ranapQueue: Array.isArray(existingState.ranapQueue) ? existingState.ranapQueue : [],
-      deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
       currentCallingPatient: null,
       currentCallingBox: null,
       isExplicitReset: true,
       resetConfirmed: true,
       lastResetAt: resetTime,
       boxOrderUpdatedAt: incomingPayload.boxOrderUpdatedAt || existingState.boxOrderUpdatedAt || null,
+      deletedPatientIds: [],
+      deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
       lastUpdated: new Date().toISOString(),
     };
   }
@@ -1864,48 +1762,36 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
 
   const mergedPatients = Array.from(patientMap.values());
 
-  // 1b. Reconcile Antrean Ranap (rawat inap, sidebar) - terpisah dari `patients`
-  // supaya tidak pernah ikut dihitung Respon Time kotak antrean. Pola tombstone
-  // & upsert-by-id sama seperti pasien di atas, tapi tanpa field completed/
-  // calledCount (item ranap dihapus dari daftar aktif begitu diceklis selesai,
-  // lalu diarsipkan ke ranap_history.json lewat endpoint terpisah).
-  const existingRanapQueue: any[] = Array.isArray(existingState.ranapQueue) ? existingState.ranapQueue : [];
-  const incomingRanapQueue: any[] = Array.isArray(incomingPayload.ranapQueue) ? incomingPayload.ranapQueue : [];
-
-  const existingDeletedRanap: string[] = Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [];
-  const incomingDeletedRanap: string[] = Array.isArray(incomingPayload.deletedRanapIds) ? incomingPayload.deletedRanapIds : [];
+  // Reconcile Ranap Queue (Rawat Inap)
+  const existingRanapQueue = Array.isArray(existingState.ranapQueue) ? existingState.ranapQueue : [];
+  const incomingRanapQueue = Array.isArray(incomingPayload.ranapQueue) ? incomingPayload.ranapQueue : [];
+  const existingDeletedRanap = Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [];
+  const incomingDeletedRanap = Array.isArray(incomingPayload.deletedRanapIds) ? incomingPayload.deletedRanapIds : [];
   const cumulativeDeletedRanapList = Array.from(new Set([...existingDeletedRanap, ...incomingDeletedRanap])).slice(-1000);
   const deletedRanapIds = new Set(cumulativeDeletedRanapList);
-
   const ranapMap = new Map<string, any>();
   for (const r of existingRanapQueue) {
-    if (r && r.id && !deletedRanapIds.has(r.id)) {
-      ranapMap.set(r.id, { ...r });
-    }
+    if (r && r.id && !deletedRanapIds.has(r.id)) ranapMap.set(r.id, { ...r });
   }
   for (const inR of incomingRanapQueue) {
     if (!inR || !inR.id || deletedRanapIds.has(inR.id)) continue;
     const existing = ranapMap.get(inR.id);
-    if (!existing) {
-      ranapMap.set(inR.id, { ...inR, createdAt: inR.createdAt || new Date().toISOString() });
-    } else {
-      ranapMap.set(inR.id, {
-        ...existing,
-        ...inR,
-        createdAt: existing.createdAt || inR.createdAt || new Date().toISOString(),
-      });
-    }
+    ranapMap.set(inR.id, existing
+      ? { ...existing, ...inR, createdAt: existing.createdAt || inR.createdAt || new Date().toISOString() }
+      : { ...inR, createdAt: inR.createdAt || new Date().toISOString() });
   }
   const mergedRanapQueue = Array.from(ranapMap.values());
 
   // 2. Reconcile Boxes
-  // Recency-wins helper for box CONTENT fields (color, title, image, dll):
+  // Recency-wins helper for box CONTENT fields (warna, judul, gambar, dll):
   // tanpa ini, siapa pun yang broadcast full-state-nya sampai ke server
   // PALING TERAKHIR akan menang untuk semua field, walau isinya lebih basi
   // (mis. perangkat lain yang belum menerima perubahan warna terbaru lalu
-  // ikut menyiarkan ulang warna lama). Dengan watermark `contentUpdatedAt`
-  // per kotak, box yang timestamp-nya lebih baru yang menang untuk konten,
-  // sementara posisi/urutan tetap diatur terpisah oleh boxOrderUpdatedAt.
+  // ikut menyiarkan ulang warna lama - inilah sebab warna kotak "reset
+  // sendiri" beberapa saat setelah diganti). Dengan watermark
+  // `contentUpdatedAt` per kotak, box yang timestamp-nya lebih baru yang
+  // menang untuk konten, sementara posisi/urutan tetap diatur terpisah oleh
+  // boxOrderUpdatedAt di atas.
   const pickBoxContentBase = (existing: any, inB: any) => {
     const existingContentTime = existing.contentUpdatedAt ? new Date(existing.contentUpdatedAt).getTime() : 0;
     const incomingContentTime = inB.contentUpdatedAt ? new Date(inB.contentUpdatedAt).getTime() : 0;
@@ -2108,10 +1994,10 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   return {
     boxes: mergedBoxes,
     patients: mergedPatients,
+    ranapQueue: mergedRanapQueue,
     callLogs: mergedLogs,
     notifications: mergedNotifs,
     savedOfficers: mergedOfficers,
-    ranapQueue: mergedRanapQueue,
     currentCallingPatient,
     currentCallingBox,
     isExplicitReset: Boolean(existingState?.isExplicitReset && mergedPatients.length === 0),
@@ -2179,7 +2065,7 @@ app.post('/api/queue', async (req, res) => {
       console.log(`[QueueSync] Synced from device ${senderDeviceId || 'unknown'}: ${mergedState.patients.length} patients, ${mergedState.boxes.length} boxes.`);
 
       if (Array.isArray(mergedState.patients) && mergedState.patients.length > 0) {
-        scheduleSyncPatientsToMasterAndArchive(mergedState.patients, mergedState.boxes);
+        scheduleSyncPatientsToMasterAndArchive(mergedState.patients);
       }
     });
 
@@ -2201,6 +2087,7 @@ app.post('/api/queue/reset', async (req, res) => {
       const resetState = {
         boxes: Array.isArray(existingState.boxes) && existingState.boxes.length > 0 ? existingState.boxes : getInitialServerState().boxes,
         patients: [],
+        ranapQueue: Array.isArray(existingState.ranapQueue) ? existingState.ranapQueue : [],
         callLogs: [],
         notifications: [],
         savedOfficers: Array.isArray(existingState.savedOfficers) ? existingState.savedOfficers : [],
@@ -2211,6 +2098,7 @@ app.post('/api/queue/reset', async (req, res) => {
         lastResetAt: resetTime,
         boxOrderUpdatedAt: existingState.boxOrderUpdatedAt || null,
         deletedPatientIds: [],
+        deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
         lastUpdated: new Date().toISOString(),
       };
 
@@ -2229,71 +2117,6 @@ app.post('/api/queue/reset', async (req, res) => {
 // Master Patient Registry APIs
 
 // GET /api/master-patients?search=...
-// GET /api/ranap-history - Riwayat pasien Antrean Ranap yang sudah diceklis
-// selesai (dipakai untuk "informasi di lain hari"), dengan filter opsional.
-app.get('/api/ranap-history', (req, res) => {
-  try {
-    const category = typeof req.query.category === 'string' ? req.query.category : '';
-    const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase().trim() : '';
-    const startDate = typeof req.query.startDate === 'string' ? req.query.startDate : '';
-    const endDate = typeof req.query.endDate === 'string' ? req.query.endDate : '';
-
-    let history = loadRanapHistory();
-
-    if (category && category !== 'all') {
-      history = history.filter((h: any) => h.category === category);
-    }
-    if (startDate) {
-      history = history.filter((h: any) => (h.completedAt || '').slice(0, 10) >= startDate);
-    }
-    if (endDate) {
-      history = history.filter((h: any) => (h.completedAt || '').slice(0, 10) <= endDate);
-    }
-    if (search) {
-      history = history.filter((h: any) =>
-        (h.patientName && h.patientName.toLowerCase().includes(search)) ||
-        (h.medicalRecordNo && h.medicalRecordNo.toLowerCase().includes(search)) ||
-        (h.roomNumber && h.roomNumber.toLowerCase().includes(search)) ||
-        (h.diagnosis && h.diagnosis.toLowerCase().includes(search))
-      );
-    }
-
-    const sorted = [...history].sort((a: any, b: any) => new Date(b.completedAt || 0).getTime() - new Date(a.completedAt || 0).getTime());
-    res.json({ status: 'ok', history: sorted });
-  } catch (error: any) {
-    console.error('Error loading ranap history:', error);
-    res.status(500).json({ error: error?.message || 'Gagal memuat riwayat antrean ranap' });
-  }
-});
-
-// POST /api/ranap-history - Arsipkan satu item Antrean Ranap yang baru diceklis selesai
-app.post('/api/ranap-history', (req, res) => {
-  try {
-    const item = req.body;
-    if (!item || !item.id || !item.patientName || !item.category) {
-      return res.status(400).json({ error: 'Data riwayat ranap tidak lengkap' });
-    }
-
-    const history = loadRanapHistory();
-    const savedItem = {
-      ...item,
-      completedAt: item.completedAt || new Date().toISOString(),
-    };
-    const existingIndex = history.findIndex((h: any) => h.id === item.id);
-    if (existingIndex >= 0) {
-      history[existingIndex] = { ...history[existingIndex], ...savedItem };
-    } else {
-      history.unshift(savedItem);
-    }
-
-    saveRanapHistory(history);
-    res.json({ status: 'ok', item: savedItem });
-  } catch (error: any) {
-    console.error('Error saving ranap history:', error);
-    res.status(500).json({ error: error?.message || 'Gagal menyimpan riwayat antrean ranap' });
-  }
-});
-
 app.get('/api/master-patients', (req, res) => {
   const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase().trim() : '';
   const patients = loadMasterPatients();
@@ -2470,6 +2293,87 @@ app.post('/api/master-patients/batch', (req, res) => {
   }
 });
 
+// GET /api/ranap-history
+app.get('/api/ranap-history', (req, res) => {
+  try {
+    const { category, search, startDate, endDate } = req.query;
+    let history = loadRanapHistory();
+
+    if (category && category !== 'all') {
+      const catStr = String(category).toLowerCase();
+      history = history.filter((item: any) => (item.category || '').toLowerCase() === catStr);
+    }
+
+    if (search) {
+      const q = String(search).toLowerCase().trim();
+      history = history.filter((item: any) =>
+        (item.patientName || '').toLowerCase().includes(q) ||
+        (item.medicalRecordNo || '').toLowerCase().includes(q) ||
+        (item.roomNumber || '').toLowerCase().includes(q) ||
+        (item.diagnosis || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (startDate) {
+      const start = new Date(String(startDate)).getTime();
+      if (!isNaN(start)) {
+        history = history.filter((item: any) => {
+          const itemDate = new Date(item.completedAt || item.createdAt || 0).getTime();
+          return itemDate >= start;
+        });
+      }
+    }
+
+    if (endDate) {
+      let endStr = String(endDate);
+      if (endStr.length === 10) endStr += 'T23:59:59.999Z';
+      const end = new Date(endStr).getTime();
+      if (!isNaN(end)) {
+        history = history.filter((item: any) => {
+          const itemDate = new Date(item.completedAt || item.createdAt || 0).getTime();
+          return itemDate <= end;
+        });
+      }
+    }
+
+    history.sort((a: any, b: any) => new Date(b.completedAt || 0).getTime() - new Date(a.completedAt || 0).getTime());
+
+    res.json({ status: 'ok', history });
+  } catch (error: any) {
+    console.error('Error fetching ranap history:', error);
+    res.status(500).json({ error: error?.message || 'Gagal memuat riwayat antrean rawat inap' });
+  }
+});
+
+// POST /api/ranap-history
+app.post('/api/ranap-history', (req, res) => {
+  try {
+    const item = req.body;
+    if (!item || !item.id || !item.patientName || !item.category) {
+      return res.status(400).json({ error: 'Data riwayat ranap tidak lengkap (id, patientName, category wajib)' });
+    }
+
+    const completedItem = {
+      ...item,
+      completedAt: item.completedAt || new Date().toISOString()
+    };
+
+    const history = loadRanapHistory();
+    const existingIndex = history.findIndex((h: any) => h.id === completedItem.id);
+    if (existingIndex >= 0) {
+      history[existingIndex] = { ...history[existingIndex], ...completedItem };
+    } else {
+      history.unshift(completedItem);
+    }
+
+    saveRanapHistory(history);
+    res.json({ status: 'ok', item: completedItem });
+  } catch (error: any) {
+    console.error('Error saving ranap history:', error);
+    res.status(500).json({ error: error?.message || 'Gagal menyimpan riwayat antrean rawat inap' });
+  }
+});
+
 // GET /api/backup/export - Export complete database snapshot
 app.get('/api/backup/export', (req, res) => {
   try {
@@ -2631,33 +2535,38 @@ app.post('/api/daily-database/visit', async (req, res) => {
     await enqueueQueueWrite(async () => {
       const dailyArchive = loadDailyArchive();
       const visits = dailyArchive[targetDate] || [];
+      const currentState = loadStateFromFile();
+      const currentBoxes = (currentState && Array.isArray(currentState.boxes)) ? currentState.boxes : [];
 
       const existingIdx = visits.findIndex((v: any) => v.id === visit.id);
-      const existingPrev = existingIdx >= 0 ? visits[existingIdx] : {};
+      const prev = existingIdx >= 0 ? visits[existingIdx] : {};
+      const boxMatch = currentBoxes.find((b: any) => b.id === (visit.boxId || prev.boxId));
+
       updatedVisit = {
+        ...prev,
         id: visit.id || `visit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         visitDate: targetDate,
         patientId: visit.patientId || visit.id,
         medicalRecordNo: visit.medicalRecordNo.trim(),
         patientName: visit.patientName.trim(),
-        boxId: visit.boxId || 'box-1',
-        // Snapshot nama terapis & judul kotak PADA SAAT kunjungan dicatat -
-        // jangan sampai kosong menimpa snapshot yang sudah ada kalau payload
-        // ini kebetulan tidak menyertakannya lagi.
-        officerName: visit.officerName || existingPrev.officerName || '',
-        boxTitle: visit.boxTitle || existingPrev.boxTitle || '',
-        queueNumber: visit.queueNumber || '',
-        actionCode: visit.actionCode || '',
-        diagnosis: visit.diagnosis || '',
-        isWarning: !!visit.isWarning,
-        isRanap: !!visit.isRanap,
-        note: visit.note || '',
-        phoneNumber: visit.phoneNumber || '',
-        completed: !!visit.completed,
-        registeredAt: visit.registeredAt || new Date().toISOString(),
-        calledAt: visit.calledAt || null,
-        completedAt: visit.completedAt || null,
-        calledCount: visit.calledCount || 0,
+        boxId: visit.boxId || prev.boxId || 'box-1',
+        boxTitle: visit.boxTitle || prev.boxTitle || boxMatch?.title || visit.boxId || '',
+        officerName: visit.officerName || prev.officerName || boxMatch?.officerName || '',
+        category: visit.category || prev.category || boxMatch?.category || '',
+        firstOfficerName: visit.firstOfficerName || prev.firstOfficerName || '',
+        firstBoxTitle: visit.firstBoxTitle || prev.firstBoxTitle || '',
+        queueNumber: visit.queueNumber || prev.queueNumber || '',
+        actionCode: visit.actionCode || prev.actionCode || '',
+        diagnosis: visit.diagnosis || prev.diagnosis || '',
+        isWarning: visit.isWarning !== undefined ? !!visit.isWarning : (prev.isWarning !== undefined ? !!prev.isWarning : false),
+        isRanap: visit.isRanap !== undefined ? !!visit.isRanap : (prev.isRanap !== undefined ? !!prev.isRanap : false),
+        note: visit.note !== undefined ? visit.note : (prev.note || ''),
+        phoneNumber: visit.phoneNumber || prev.phoneNumber || '',
+        completed: visit.completed !== undefined ? !!visit.completed : (prev.completed !== undefined ? !!prev.completed : false),
+        registeredAt: visit.registeredAt || prev.registeredAt || new Date().toISOString(),
+        calledAt: visit.calledAt !== undefined ? visit.calledAt : (prev.calledAt || null),
+        completedAt: visit.completedAt !== undefined ? visit.completedAt : (prev.completedAt || null),
+        calledCount: visit.calledCount !== undefined ? visit.calledCount : (prev.calledCount || 0),
       };
 
       if (existingIdx >= 0) {
@@ -2741,7 +2650,7 @@ app.get('/api/monthly-report', (req, res) => {
 
     // If active queue has patients for today and today matches this month, ensure synced
     if (today.startsWith(monthPrefix) && (!dailyArchive[today] || dailyArchive[today].length === 0) && currentState?.patients?.length > 0) {
-      syncPatientsToMasterAndArchive(currentState.patients, currentState.boxes);
+      syncPatientsToMasterAndArchive(currentState.patients);
     }
 
     // Collect all visits in this month
@@ -2759,19 +2668,12 @@ app.get('/api/monthly-report', (req, res) => {
 
     // Also include today's queue patients if any exist and not yet in archive
     if (today.startsWith(monthPrefix) && currentState && Array.isArray(currentState.patients)) {
-      const todayBoxLookup = new Map<string, any>();
-      if (Array.isArray(currentState.boxes)) {
-        currentState.boxes.forEach((b: any) => { if (b && b.id) todayBoxLookup.set(b.id, b); });
-      }
       currentState.patients.forEach((qp: any) => {
         const alreadyExists = allMonthlyVisits.some((mv) => mv.id === qp.id);
         if (!alreadyExists) {
-          const box = todayBoxLookup.get(qp.boxId);
           allMonthlyVisits.push({
             ...qp,
             visitDate: today,
-            officerName: (box && box.officerName) || qp.officerName || '',
-            boxTitle: (box && box.title) || qp.boxTitle || '',
             registeredAt: qp.createdAt || new Date().toISOString()
           });
         }
@@ -3484,12 +3386,71 @@ app.get('/api/events', (req, res) => {
   res.on('error', cleanupClient);
 });
 
+async function flushPendingFirestoreMirrors(): Promise<void> {
+  const tasks: Promise<any>[] = [];
+
+  if (mirrorDebounceTimer) {
+    clearTimeout(mirrorDebounceTimer);
+    mirrorDebounceTimer = null;
+    if (pendingMirrorState && !isFirestoreMirrorDisabled) {
+      tasks.push(setDoc(QUEUE_STATE_DOC_REF, {
+        ...JSON.parse(JSON.stringify(pendingMirrorState)),
+        lastMirroredAt: new Date().toISOString(),
+      }).catch((err) => console.warn('[Shutdown] Gagal flush queue state mirror:', err)));
+    }
+  }
+  if (dailyArchiveMirrorDebounceTimer) {
+    clearTimeout(dailyArchiveMirrorDebounceTimer);
+    dailyArchiveMirrorDebounceTimer = null;
+    if (pendingDailyArchiveMirror && !isFirestoreMirrorDisabled) {
+      tasks.push(setDoc(DAILY_ARCHIVE_DOC_REF, {
+        archive: JSON.parse(JSON.stringify(pendingDailyArchiveMirror)),
+        lastMirroredAt: new Date().toISOString(),
+      }).catch((err) => console.warn('[Shutdown] Gagal flush daily archive mirror:', err)));
+    }
+  }
+  if (masterPatientsMirrorDebounceTimer) {
+    clearTimeout(masterPatientsMirrorDebounceTimer);
+    masterPatientsMirrorDebounceTimer = null;
+    if (pendingMasterPatientsMirror && !isFirestoreMirrorDisabled) {
+      tasks.push(setDoc(MASTER_PATIENTS_DOC_REF, {
+        patients: JSON.parse(JSON.stringify(pendingMasterPatientsMirror)),
+        lastMirroredAt: new Date().toISOString(),
+      }).catch((err) => console.warn('[Shutdown] Gagal flush master patients mirror:', err)));
+    }
+  }
+  if (ranapHistoryMirrorDebounceTimer) {
+    clearTimeout(ranapHistoryMirrorDebounceTimer);
+    ranapHistoryMirrorDebounceTimer = null;
+    if (pendingRanapHistoryMirror && !isFirestoreMirrorDisabled) {
+      tasks.push(setDoc(RANAP_HISTORY_DOC_REF, {
+        history: JSON.parse(JSON.stringify(pendingRanapHistoryMirror)),
+        lastMirroredAt: new Date().toISOString(),
+      }).catch((err) => console.warn('[Shutdown] Gagal flush ranap history mirror:', err)));
+    }
+  }
+
+  if (tasks.length > 0) {
+    console.log(`[Shutdown] Flushing ${tasks.length} pending Firestore mirror write(s)...`);
+    await Promise.allSettled(tasks);
+  }
+}
+
+let isShuttingDown = false;
+async function handleShutdownSignal(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`[Shutdown] Received ${signal}, flushing pending writes before exit...`);
+  try { await flushPendingFirestoreMirrors(); } finally { process.exit(0); }
+}
+
+process.on('SIGTERM', () => { void handleShutdownSignal('SIGTERM'); });
+process.on('SIGINT', () => { void handleShutdownSignal('SIGINT'); });
+
 async function startServer() {
   // Pulihkan state dari Cloud Firestore dulu kalau disk lokal instance ini kosong/baru
   // (mis. instance backend di-recycle oleh platform hosting saat idle) sebelum mulai
-  // melayani request, supaya device yang connect tidak melihat papan antrian kosong,
-  // rekap harian/bulanan per terapis kembali kosong, atau database pasien master
-  // kembali ke data contoh bawaan.
+  // melayani request, supaya device yang connect tidak melihat papan antrian kosong.
   await Promise.all([
     hydrateStateFromFirestoreIfNeeded(),
     hydrateDailyArchiveFromFirestoreIfNeeded(),
@@ -3516,88 +3477,5 @@ async function startServer() {
     console.log(`Sistem Antrian IRM RSPP Server running on http://0.0.0.0:${PORT}`);
   });
 }
-
-// Flush semua mirror Firestore yang masih tertunda (debounce 5 detik belum sempat
-// jalan) sebelum instance benar-benar dimatikan oleh platform hosting (SIGTERM saat
-// auto-scaling idle ke nol). Tanpa ini, perubahan yang terjadi persis sebelum
-// instance di-recycle (mis. mengatur ulang urutan kotak, lalu langsung ditinggal)
-// bisa ikut hilang dari Firestore juga - sehingga saat instance baru menyala,
-// hydrate...FromFirestoreIfNeeded() memulihkan snapshot yang sedikit basi, bukan
-// yang paling akhir.
-async function flushPendingFirestoreMirrors(): Promise<void> {
-  const tasks: Promise<any>[] = [];
-
-  if (mirrorDebounceTimer) {
-    clearTimeout(mirrorDebounceTimer);
-    mirrorDebounceTimer = null;
-    if (pendingMirrorState && !isFirestoreMirrorDisabled) {
-      tasks.push(
-        setDoc(QUEUE_STATE_DOC_REF, {
-          ...JSON.parse(JSON.stringify(pendingMirrorState)),
-          lastMirroredAt: new Date().toISOString(),
-        }).catch((err) => console.warn('[Shutdown] Gagal flush queue state mirror:', err))
-      );
-    }
-  }
-
-  if (dailyArchiveMirrorDebounceTimer) {
-    clearTimeout(dailyArchiveMirrorDebounceTimer);
-    dailyArchiveMirrorDebounceTimer = null;
-    if (pendingDailyArchiveMirror && !isFirestoreMirrorDisabled) {
-      tasks.push(
-        setDoc(DAILY_ARCHIVE_DOC_REF, {
-          archive: JSON.parse(JSON.stringify(pendingDailyArchiveMirror)),
-          lastMirroredAt: new Date().toISOString(),
-        }).catch((err) => console.warn('[Shutdown] Gagal flush daily archive mirror:', err))
-      );
-    }
-  }
-
-  if (masterPatientsMirrorDebounceTimer) {
-    clearTimeout(masterPatientsMirrorDebounceTimer);
-    masterPatientsMirrorDebounceTimer = null;
-    if (pendingMasterPatientsMirror && !isFirestoreMirrorDisabled) {
-      tasks.push(
-        setDoc(MASTER_PATIENTS_DOC_REF, {
-          patients: JSON.parse(JSON.stringify(pendingMasterPatientsMirror)),
-          lastMirroredAt: new Date().toISOString(),
-        }).catch((err) => console.warn('[Shutdown] Gagal flush master patients mirror:', err))
-      );
-    }
-  }
-
-  if (ranapHistoryMirrorDebounceTimer) {
-    clearTimeout(ranapHistoryMirrorDebounceTimer);
-    ranapHistoryMirrorDebounceTimer = null;
-    if (pendingRanapHistoryMirror && !isFirestoreMirrorDisabled) {
-      tasks.push(
-        setDoc(RANAP_HISTORY_DOC_REF, {
-          history: JSON.parse(JSON.stringify(pendingRanapHistoryMirror)),
-          lastMirroredAt: new Date().toISOString(),
-        }).catch((err) => console.warn('[Shutdown] Gagal flush ranap history mirror:', err))
-      );
-    }
-  }
-
-  if (tasks.length > 0) {
-    console.log(`[Shutdown] Flushing ${tasks.length} pending Firestore mirror write(s) before exit...`);
-    await Promise.allSettled(tasks);
-  }
-}
-
-let isShuttingDown = false;
-async function handleShutdownSignal(signal: string) {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-  console.log(`[Shutdown] Received ${signal}, flushing pending Firestore writes before exit...`);
-  try {
-    await flushPendingFirestoreMirrors();
-  } finally {
-    process.exit(0);
-  }
-}
-
-process.on('SIGTERM', () => { void handleShutdownSignal('SIGTERM'); });
-process.on('SIGINT', () => { void handleShutdownSignal('SIGINT'); });
 
 startServer();
