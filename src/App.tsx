@@ -225,38 +225,56 @@ function generateUniqueId(prefix: string = 'id'): string {
   return `${prefix}-${Date.now()}-${entropy}`;
 }
 
-const TOMBSTONES_STORAGE_KEY = 'antrian_deleted_patient_tombstones';
-
-export function getLocalTombstones(): Set<string> {
-  try {
-    const raw = localStorage.getItem(TOMBSTONES_STORAGE_KEY);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    return new Set(Array.isArray(arr) ? arr : []);
-  } catch {
-    return new Set();
-  }
+// Tombstone berbasis localStorage: bertahan lintas reload & kegagalan jaringan,
+// beda dengan ref di memori yang langsung kosong lagi begitu satu siklus
+// broadcast selesai TANPA PEDULI apakah request-nya benar-benar berhasil
+// sampai ke server. Dipakai untuk penghapusan pasien, kotak, & antrean ranap
+// supaya item yang sudah dihapus tidak "hidup lagi" gara-gara ada perangkat
+// lain yang masih menyiarkan data lama saat request hapus tadi gagal terkirim.
+function createLocalTombstoneStore(storageKey: string) {
+  const get = (): Set<string> => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+      return new Set();
+    }
+  };
+  const add = (id: string): void => {
+    try {
+      if (!id) return;
+      const set = get();
+      set.add(id);
+      const arr = Array.from(set).slice(-1000);
+      localStorage.setItem(storageKey, JSON.stringify(arr));
+    } catch {
+      // ignore
+    }
+  };
+  const clear = (): void => {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // ignore
+    }
+  };
+  return { get, add, clear };
 }
 
-export function addLocalTombstone(patientId: string): void {
-  try {
-    if (!patientId) return;
-    const set = getLocalTombstones();
-    set.add(patientId);
-    const arr = Array.from(set).slice(-1000);
-    localStorage.setItem(TOMBSTONES_STORAGE_KEY, JSON.stringify(arr));
-  } catch {
-    // ignore
-  }
-}
+const patientTombstoneStore = createLocalTombstoneStore('antrian_deleted_patient_tombstones');
+export const getLocalTombstones = patientTombstoneStore.get;
+export const addLocalTombstone = patientTombstoneStore.add;
+export const clearLocalTombstones = patientTombstoneStore.clear;
 
-export function clearLocalTombstones(): void {
-  try {
-    localStorage.removeItem(TOMBSTONES_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
-}
+const boxTombstoneStore = createLocalTombstoneStore('antrian_deleted_box_tombstones');
+export const getLocalBoxTombstones = boxTombstoneStore.get;
+export const addLocalBoxTombstone = boxTombstoneStore.add;
+
+const ranapTombstoneStore = createLocalTombstoneStore('antrian_deleted_ranap_tombstones');
+export const getLocalRanapTombstones = ranapTombstoneStore.get;
+export const addLocalRanapTombstone = ranapTombstoneStore.add;
 
 // Helper function to safely merge incoming patient array with current state (prevents accidental wiping on cold start)
 export function reconcileClientPatients(
@@ -1116,8 +1134,13 @@ export default function App() {
       const localTombstones = Array.from(getLocalTombstones());
       const combinedDeleted = Array.from(new Set([...deletedPatientIdsRef.current, ...localTombstones]));
       const deletedP = combinedDeleted.length > 0 ? combinedDeleted : undefined;
-      const deletedB = deletedBoxIdsRef.current.length > 0 ? [...deletedBoxIdsRef.current] : undefined;
-      const deletedR = deletedRanapIdsRef.current.length > 0 ? [...deletedRanapIdsRef.current] : undefined;
+
+      const combinedDeletedBoxes = Array.from(new Set([...deletedBoxIdsRef.current, ...Array.from(getLocalBoxTombstones())]));
+      const deletedB = combinedDeletedBoxes.length > 0 ? combinedDeletedBoxes : undefined;
+
+      const combinedDeletedRanap = Array.from(new Set([...deletedRanapIdsRef.current, ...Array.from(getLocalRanapTombstones())]));
+      const deletedR = combinedDeletedRanap.length > 0 ? combinedDeletedRanap : undefined;
+
       deletedPatientIdsRef.current = [];
       deletedBoxIdsRef.current = [];
       deletedRanapIdsRef.current = [];
@@ -1178,6 +1201,7 @@ export default function App() {
     });
 
     // Remove from active queue
+    addLocalRanapTombstone(id);
     deletedRanapIdsRef.current.push(id);
     hasLocalMutationRef.current = true;
     setRanapQueue(prev => {
@@ -1197,6 +1221,7 @@ export default function App() {
   };
 
   const handleDeleteRanapPatient = (id: string) => {
+    addLocalRanapTombstone(id);
     deletedRanapIdsRef.current.push(id);
     hasLocalMutationRef.current = true;
     setRanapQueue(prev => {
@@ -1684,6 +1709,7 @@ export default function App() {
     }
 
     hasLocalMutationRef.current = true;
+    addLocalBoxTombstone(boxId);
     deletedBoxIdsRef.current.push(boxId);
 
     // If transferTargetBoxId is provided, transfer active patients to target box

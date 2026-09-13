@@ -3206,6 +3206,12 @@ app.post('/api/queue/box-images', async (req, res) => {
           ...boxes[boxIdx],
           instructionImageUrls: cleanUrls,
           instructionImageUrl: cleanUrls[0] || undefined,
+          // WAJIB: endpoint ini menulis langsung ke state (bypass
+          // reconcileQueueStates), jadi kalau contentUpdatedAt tidak ikut
+          // di-bump di sini, foto yang baru saja diupload bisa hilang lagi
+          // ditimpa broadcast basi dari perangkat lain - persis bug yang
+          // coba dicegah oleh pickBoxContentBase (lihat reconcileQueueStates).
+          contentUpdatedAt: new Date().toISOString(),
         };
         state.boxes = boxes;
         state.lastUpdated = new Date().toISOString();
@@ -3568,12 +3574,40 @@ async function flushPendingFirestoreMirrors(): Promise<void> {
   }
 }
 
+// syncPatientsToMasterAndArchive (arsip kunjungan harian & master pasien)
+// dijadwalkan lewat debounce 1.5 detik-nya SENDIRI (masterArchiveDebounceTimer),
+// terpisah dari 4 timer mirror Firestore di atas. Kalau proses di-restart
+// tepat di jendela 1.5 detik itu (mis. redeploy rutin), kunjungan yang baru
+// saja disinkronkan ke /api/queue hilang permanen dari daily_archive.json &
+// patients_master.json (padahal queue_store.json sudah menyimpannya) -
+// dipanggil paling awal di bawah supaya hasilnya (yang juga menjadwalkan
+// mirror Firestore baru) ikut sempat di-flush oleh flushPendingFirestoreMirrors.
+function flushPendingMasterArchiveSync(): void {
+  if (masterArchiveDebounceTimer) {
+    clearTimeout(masterArchiveDebounceTimer);
+    masterArchiveDebounceTimer = null;
+    if (pendingMasterArchivePatients) {
+      try {
+        syncPatientsToMasterAndArchive(pendingMasterArchivePatients);
+      } catch (err) {
+        console.warn('[Shutdown] Gagal flush sinkronisasi arsip/master pasien:', err);
+      }
+      pendingMasterArchivePatients = null;
+    }
+  }
+}
+
 let isShuttingDown = false;
 async function handleShutdownSignal(signal: string) {
   if (isShuttingDown) return;
   isShuttingDown = true;
   console.log(`[Shutdown] Received ${signal}, flushing pending writes before exit...`);
-  try { await flushPendingFirestoreMirrors(); } finally { process.exit(0); }
+  try {
+    flushPendingMasterArchiveSync();
+    await flushPendingFirestoreMirrors();
+  } finally {
+    process.exit(0);
+  }
 }
 
 process.on('SIGTERM', () => { void handleShutdownSignal('SIGTERM'); });
