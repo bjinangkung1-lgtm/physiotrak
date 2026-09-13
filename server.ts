@@ -804,12 +804,22 @@ function saveSecurityConfig(data: { appPassword?: string; databasePassword?: str
 }
 
 // Helper: sync patient array to today's daily archive and update master patient visits
-function syncPatientsToMasterAndArchive(patients: any[]) {
+function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   if (!Array.isArray(patients) || patients.length === 0) return;
 
   const today = getLocalDateStringWIB();
   const masterPatients = loadMasterPatients();
   const dailyArchive = loadDailyArchive();
+  // Peta boxId -> nama terapis/judul kotak PADA SAAT INI, dibekukan ke tiap
+  // arsip kunjungan (lihat officerName/boxTitle di bawah). Tanpa ini, Laporan
+  // Bulanan Terapis akan salah atribusi setiap kali sebuah kotak diganti nama/
+  // petugas atau dihapus (rotasi shift, penggantian terapis, dsb) - riwayat
+  // bulan lalu ikut berubah seolah dikerjakan terapis yang sekarang menempati
+  // boxId yang sama, padahal itu terapis yang berbeda.
+  const boxLookup = new Map<string, any>();
+  if (Array.isArray(boxes)) {
+    boxes.forEach((b) => { if (b && b.id) boxLookup.set(b.id, b); });
+  }
 
   let masterUpdated = false;
 
@@ -896,6 +906,7 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
   patients.forEach((p) => {
     if (!p || !p.id || !p.patientName || !p.medicalRecordNo) return;
     const prev = visitsMap.get(p.id) || {};
+    const box = boxLookup.get(p.boxId);
     visitsMap.set(p.id, {
       ...prev,
       id: p.id,
@@ -904,6 +915,11 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
       medicalRecordNo: p.medicalRecordNo.trim(),
       patientName: p.patientName.trim(),
       boxId: p.boxId || prev.boxId || 'box-1',
+      // Simpan snapshot nama terapis & judul kotak - JANGAN pernah menimpa
+      // dengan string kosong kalau box sudah tidak ada lagi (mis. dihapus di
+      // kunjungan berikutnya); pertahankan snapshot yang sudah tersimpan.
+      officerName: (box && box.officerName) || prev.officerName || '',
+      boxTitle: (box && box.title) || prev.boxTitle || '',
       queueNumber: p.queueNumber || prev.queueNumber || '',
       actionCode: p.actionCode || prev.actionCode || '',
       diagnosis: p.diagnosis || prev.diagnosis || '',
@@ -926,17 +942,20 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
 // Debounced master patient & daily archive synchronization helper
 let masterArchiveDebounceTimer: NodeJS.Timeout | null = null;
 let pendingMasterArchivePatients: any[] | null = null;
+let pendingMasterArchiveBoxes: any[] | null = null;
 
-function scheduleSyncPatientsToMasterAndArchive(patients: any[]) {
+function scheduleSyncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   pendingMasterArchivePatients = patients;
+  pendingMasterArchiveBoxes = boxes || pendingMasterArchiveBoxes;
   if (masterArchiveDebounceTimer) clearTimeout(masterArchiveDebounceTimer);
   masterArchiveDebounceTimer = setTimeout(() => {
     masterArchiveDebounceTimer = null;
     const toSync = pendingMasterArchivePatients;
+    const toSyncBoxes = pendingMasterArchiveBoxes;
     pendingMasterArchivePatients = null;
     if (toSync) {
       try {
-        syncPatientsToMasterAndArchive(toSync);
+        syncPatientsToMasterAndArchive(toSync, toSyncBoxes || undefined);
       } catch (err) {
         console.error('[MasterArchiveSync] Deferred sync error:', err);
       }
@@ -2160,7 +2179,7 @@ app.post('/api/queue', async (req, res) => {
       console.log(`[QueueSync] Synced from device ${senderDeviceId || 'unknown'}: ${mergedState.patients.length} patients, ${mergedState.boxes.length} boxes.`);
 
       if (Array.isArray(mergedState.patients) && mergedState.patients.length > 0) {
-        scheduleSyncPatientsToMasterAndArchive(mergedState.patients);
+        scheduleSyncPatientsToMasterAndArchive(mergedState.patients, mergedState.boxes);
       }
     });
 
@@ -2614,6 +2633,7 @@ app.post('/api/daily-database/visit', async (req, res) => {
       const visits = dailyArchive[targetDate] || [];
 
       const existingIdx = visits.findIndex((v: any) => v.id === visit.id);
+      const existingPrev = existingIdx >= 0 ? visits[existingIdx] : {};
       updatedVisit = {
         id: visit.id || `visit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         visitDate: targetDate,
@@ -2621,6 +2641,11 @@ app.post('/api/daily-database/visit', async (req, res) => {
         medicalRecordNo: visit.medicalRecordNo.trim(),
         patientName: visit.patientName.trim(),
         boxId: visit.boxId || 'box-1',
+        // Snapshot nama terapis & judul kotak PADA SAAT kunjungan dicatat -
+        // jangan sampai kosong menimpa snapshot yang sudah ada kalau payload
+        // ini kebetulan tidak menyertakannya lagi.
+        officerName: visit.officerName || existingPrev.officerName || '',
+        boxTitle: visit.boxTitle || existingPrev.boxTitle || '',
         queueNumber: visit.queueNumber || '',
         actionCode: visit.actionCode || '',
         diagnosis: visit.diagnosis || '',
@@ -2716,7 +2741,7 @@ app.get('/api/monthly-report', (req, res) => {
 
     // If active queue has patients for today and today matches this month, ensure synced
     if (today.startsWith(monthPrefix) && (!dailyArchive[today] || dailyArchive[today].length === 0) && currentState?.patients?.length > 0) {
-      syncPatientsToMasterAndArchive(currentState.patients);
+      syncPatientsToMasterAndArchive(currentState.patients, currentState.boxes);
     }
 
     // Collect all visits in this month
@@ -2734,12 +2759,19 @@ app.get('/api/monthly-report', (req, res) => {
 
     // Also include today's queue patients if any exist and not yet in archive
     if (today.startsWith(monthPrefix) && currentState && Array.isArray(currentState.patients)) {
+      const todayBoxLookup = new Map<string, any>();
+      if (Array.isArray(currentState.boxes)) {
+        currentState.boxes.forEach((b: any) => { if (b && b.id) todayBoxLookup.set(b.id, b); });
+      }
       currentState.patients.forEach((qp: any) => {
         const alreadyExists = allMonthlyVisits.some((mv) => mv.id === qp.id);
         if (!alreadyExists) {
+          const box = todayBoxLookup.get(qp.boxId);
           allMonthlyVisits.push({
             ...qp,
             visitDate: today,
+            officerName: (box && box.officerName) || qp.officerName || '',
+            boxTitle: (box && box.title) || qp.boxTitle || '',
             registeredAt: qp.createdAt || new Date().toISOString()
           });
         }

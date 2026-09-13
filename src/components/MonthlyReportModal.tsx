@@ -128,7 +128,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
   });
 
   // Filter completed patients belonging to selected month and year
-  const completedPatientsInMonth: PatientItem[] = combinedList
+  const completedPatientsInMonth: Array<PatientItem & { officerName?: string; boxTitle?: string }> = combinedList
     .filter((p: any) => {
       if (!p.completed) return false;
       const rawDate = p.completedAt || p.createdAt || p.registeredAt;
@@ -142,6 +142,13 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
       patientName: p.patientName,
       medicalRecordNo: p.medicalRecordNo,
       boxId: p.boxId || 'box-1',
+      // Snapshot nama terapis & judul kotak PADA SAAT kunjungan dicatat (lihat
+      // server.ts syncPatientsToMasterAndArchive). Dipakai lebih diutamakan
+      // daripada `boxes` yang sedang aktif sekarang di pengelompokan bawah,
+      // supaya riwayat bulan lalu tidak "berpindah terapis" begitu saja saat
+      // sebuah kotak diganti nama/petugas atau dihapus (rotasi shift, dst).
+      officerName: p.officerName || '',
+      boxTitle: p.boxTitle || '',
       queueNumber: p.queueNumber || '',
       actionCode: p.actionCode || '',
       diagnosis: p.diagnosis || '',
@@ -190,13 +197,18 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
   // Populate patients into groups
   completedPatientsInMonth.forEach(p => {
     const box = boxes.find(b => b.id === p.boxId);
-    const key = box ? (box.officerName.trim() || box.title.trim()) : 'Lainnya / Umum';
+    // Utamakan snapshot officerName/boxTitle yang dibekukan saat kunjungan
+    // dicatat; baru jatuh ke box yang AKTIF SEKARANG untuk arsip lama yang
+    // belum punya snapshot ini, lalu 'Lainnya / Umum' sebagai jalan terakhir.
+    const snapshotName = (p.officerName && p.officerName.trim()) || (p.boxTitle && p.boxTitle.trim());
+    const liveName = box ? (box.officerName.trim() || box.title.trim()) : '';
+    const key = snapshotName || liveName || 'Lainnya / Umum';
 
     if (!therapistMap.has(key)) {
       therapistMap.set(key, {
-        therapistName: box ? (box.officerName || box.title) : 'Lainnya',
+        therapistName: p.officerName || p.boxTitle || (box ? (box.officerName || box.title) : 'Lainnya'),
         boxId: p.boxId,
-        boxTitle: box ? box.title : 'Ruangan',
+        boxTitle: p.boxTitle || (box ? box.title : 'Ruangan'),
         location: box ? box.location : '-',
         patients: [],
         actionCounts: {},
