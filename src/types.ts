@@ -221,12 +221,8 @@ export interface QueueBox {
   autoCallNext?: boolean; // Legacy optional field
   hasUnreadNewInput?: boolean;
   order?: number; // Explicit visual sequence order index
+  contentUpdatedAt?: string; // Timestamp of last content/color/title/image update
   createdAt: string;
-  // Watermark stamped whenever CONTENT fields (warna, judul, gambar, dll)
-  // berubah, supaya broadcast full-state basi dari perangkat lain tidak
-  // pernah diam-diam menimpa perubahan yang lebih baru - lihat
-  // mergeBoxesByRecency di App.tsx dan pickBoxContentBase di server.ts.
-  contentUpdatedAt?: string;
 }
 
 export interface AppNotification {

@@ -182,34 +182,69 @@ export const normalizeAndMergeBoxes = (rawList: any[]): QueueBox[] => {
   }));
 };
 
-// Merge an incoming box list with the current local one WITHOUT letting a
-// stale broadcast overwrite a newer local edit (e.g. warna kotak yang baru
-// saja diganti balik sendiri karena ada perangkat lain yang menyiarkan ulang
-// state kotak versi lama). Setiap kotak dibandingkan per-id berdasarkan
-// `contentUpdatedAt`: pemilik timestamp lebih baru yang menang untuk field
-// KONTEN (warna, judul, gambar, dll), sedangkan posisi/urutan & badge tetap
-// mengikuti data yang baru masuk karena itu sudah diselesaikan otomatis oleh
-// server (lihat boxOrderUpdatedAt).
-export const mergeBoxesByRecency = (currentBoxes: QueueBox[], incomingRaw: any[]): QueueBox[] => {
-  const normalizedIncoming = normalizeAndMergeBoxes(incomingRaw);
-  const currentMap = new Map(currentBoxes.map(b => [b.id, b]));
+export function createLocalTombstoneStore(storageKey: string, maxItems: number = 1000) {
+  const getTombstones = (): Set<string> => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+      return new Set();
+    }
+  };
 
+  const addTombstone = (id: string): void => {
+    try {
+      if (!id) return;
+      const set = getTombstones();
+      set.add(id);
+      const arr = Array.from(set).slice(-maxItems);
+      localStorage.setItem(storageKey, JSON.stringify(arr));
+    } catch {}
+  };
+
+  const clearTombstones = (): void => {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {}
+  };
+
+  return { getTombstones, addTombstone, clearTombstones };
+}
+
+const patientTombstoneStore = createLocalTombstoneStore('antrian_deleted_patient_tombstones');
+export const getLocalTombstones = patientTombstoneStore.getTombstones;
+export const addLocalTombstone = patientTombstoneStore.addTombstone;
+export const clearLocalTombstones = patientTombstoneStore.clearTombstones;
+
+const boxTombstoneStore = createLocalTombstoneStore('antrian_deleted_box_tombstones');
+export const getLocalBoxTombstones = boxTombstoneStore.getTombstones;
+export const addLocalBoxTombstone = boxTombstoneStore.addTombstone;
+export const clearLocalBoxTombstones = boxTombstoneStore.clearTombstones;
+
+const ranapTombstoneStore = createLocalTombstoneStore('antrian_deleted_ranap_tombstones');
+export const getLocalRanapTombstones = ranapTombstoneStore.getTombstones;
+export const addLocalRanapTombstone = ranapTombstoneStore.addTombstone;
+export const clearLocalRanapTombstones = ranapTombstoneStore.clearTombstones;
+
+// Safe recency-based box content reconciler: ensures newer color/name changes aren't overwritten by stale broadcasts
+export const mergeBoxesByRecency = (currentBoxes: QueueBox[], incomingRaw: QueueBox[], deletedBoxIds?: string[]): QueueBox[] => {
+  const localBoxTombstones = getLocalBoxTombstones();
+  const deletedSet = new Set([...(deletedBoxIds || []), ...Array.from(localBoxTombstones)]);
+  const normalizedIncoming = normalizeAndMergeBoxes(incomingRaw).filter(b => !deletedSet.has(b.id));
+  const currentMap = new Map<string, QueueBox>(currentBoxes.filter(b => !deletedSet.has(b.id)).map(b => [b.id, b]));
   return normalizedIncoming.map(inB => {
     const cur = currentMap.get(inB.id);
     if (!cur) return inB;
-
     const curTime = cur.contentUpdatedAt ? new Date(cur.contentUpdatedAt).getTime() : 0;
     const inTime = inB.contentUpdatedAt ? new Date(inB.contentUpdatedAt).getTime() : 0;
-
     if (curTime > inTime) {
-      // Local content is strictly newer than what just arrived - keep it,
-      // but still adopt incoming's position/badge fields since those are
-      // server-resolved and safe to follow.
       return {
         ...cur,
-        order: inB.order,
-        isPinned: inB.isPinned,
-        hasUnreadNewInput: inB.hasUnreadNewInput
+        order: typeof inB.order === 'number' ? inB.order : cur.order,
+        isPinned: inB.isPinned !== undefined ? inB.isPinned : cur.isPinned,
+        hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : cur.hasUnreadNewInput
       };
     }
     return inB;
@@ -224,57 +259,6 @@ function generateUniqueId(prefix: string = 'id'): string {
   const entropy = Math.random().toString(36).substring(2, 9) + Math.random().toString(36).substring(2, 6);
   return `${prefix}-${Date.now()}-${entropy}`;
 }
-
-// Tombstone berbasis localStorage: bertahan lintas reload & kegagalan jaringan,
-// beda dengan ref di memori yang langsung kosong lagi begitu satu siklus
-// broadcast selesai TANPA PEDULI apakah request-nya benar-benar berhasil
-// sampai ke server. Dipakai untuk penghapusan pasien, kotak, & antrean ranap
-// supaya item yang sudah dihapus tidak "hidup lagi" gara-gara ada perangkat
-// lain yang masih menyiarkan data lama saat request hapus tadi gagal terkirim.
-function createLocalTombstoneStore(storageKey: string) {
-  const get = (): Set<string> => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) return new Set();
-      const arr = JSON.parse(raw);
-      return new Set(Array.isArray(arr) ? arr : []);
-    } catch {
-      return new Set();
-    }
-  };
-  const add = (id: string): void => {
-    try {
-      if (!id) return;
-      const set = get();
-      set.add(id);
-      const arr = Array.from(set).slice(-1000);
-      localStorage.setItem(storageKey, JSON.stringify(arr));
-    } catch {
-      // ignore
-    }
-  };
-  const clear = (): void => {
-    try {
-      localStorage.removeItem(storageKey);
-    } catch {
-      // ignore
-    }
-  };
-  return { get, add, clear };
-}
-
-const patientTombstoneStore = createLocalTombstoneStore('antrian_deleted_patient_tombstones');
-export const getLocalTombstones = patientTombstoneStore.get;
-export const addLocalTombstone = patientTombstoneStore.add;
-export const clearLocalTombstones = patientTombstoneStore.clear;
-
-const boxTombstoneStore = createLocalTombstoneStore('antrian_deleted_box_tombstones');
-export const getLocalBoxTombstones = boxTombstoneStore.get;
-export const addLocalBoxTombstone = boxTombstoneStore.add;
-
-const ranapTombstoneStore = createLocalTombstoneStore('antrian_deleted_ranap_tombstones');
-export const getLocalRanapTombstones = ranapTombstoneStore.get;
-export const addLocalRanapTombstone = ranapTombstoneStore.add;
 
 // Helper function to safely merge incoming patient array with current state (prevents accidental wiping on cold start)
 export function reconcileClientPatients(
@@ -731,8 +715,10 @@ export default function App() {
         localStorage.removeItem('antrian_call_logs');
 
         if (syncData.boxes && Array.isArray(syncData.boxes) && syncData.boxes.length > 0) {
-          const completeBoxes = normalizeAndMergeBoxes(syncData.boxes);
-          setBoxes(prev => JSON.stringify(prev) === JSON.stringify(completeBoxes) ? prev : completeBoxes);
+          setBoxes(prev => {
+            const merged = mergeBoxesByRecency(prev, syncData.boxes);
+            return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
+          });
         }
 
         setTimeout(() => {
@@ -743,7 +729,7 @@ export default function App() {
 
       if (syncData.boxes && Array.isArray(syncData.boxes) && syncData.boxes.length > 0) {
         setBoxes(prev => {
-          const merged = mergeBoxesByRecency(prev, syncData.boxes!);
+          const merged = mergeBoxesByRecency(prev, syncData.boxes);
           return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
         });
       }
@@ -1131,15 +1117,17 @@ export default function App() {
     broadcastDebounceTimerRef.current = setTimeout(() => {
       broadcastDebounceTimerRef.current = null;
 
-      const localTombstones = Array.from(getLocalTombstones());
-      const combinedDeleted = Array.from(new Set([...deletedPatientIdsRef.current, ...localTombstones]));
-      const deletedP = combinedDeleted.length > 0 ? combinedDeleted : undefined;
+      const localPatientTombstones = Array.from(getLocalTombstones());
+      const combinedDeletedP = Array.from(new Set([...deletedPatientIdsRef.current, ...localPatientTombstones]));
+      const deletedP = combinedDeletedP.length > 0 ? combinedDeletedP : undefined;
 
-      const combinedDeletedBoxes = Array.from(new Set([...deletedBoxIdsRef.current, ...Array.from(getLocalBoxTombstones())]));
-      const deletedB = combinedDeletedBoxes.length > 0 ? combinedDeletedBoxes : undefined;
+      const localBoxTombstones = Array.from(getLocalBoxTombstones());
+      const combinedDeletedB = Array.from(new Set([...deletedBoxIdsRef.current, ...localBoxTombstones]));
+      const deletedB = combinedDeletedB.length > 0 ? combinedDeletedB : undefined;
 
-      const combinedDeletedRanap = Array.from(new Set([...deletedRanapIdsRef.current, ...Array.from(getLocalRanapTombstones())]));
-      const deletedR = combinedDeletedRanap.length > 0 ? combinedDeletedRanap : undefined;
+      const localRanapTombstones = Array.from(getLocalRanapTombstones());
+      const combinedDeletedR = Array.from(new Set([...deletedRanapIdsRef.current, ...localRanapTombstones]));
+      const deletedR = combinedDeletedR.length > 0 ? combinedDeletedR : undefined;
 
       deletedPatientIdsRef.current = [];
       deletedBoxIdsRef.current = [];
@@ -1648,13 +1636,13 @@ export default function App() {
   const handleAddBox = (boxData: Omit<QueueBox, 'id' | 'createdAt'>) => {
     hasLocalMutationRef.current = true;
     const determinedCategory = boxData.category || getTherapistCategory(boxData.officerName, boxData.location) || 'fisio';
-    const nowIso = new Date().toISOString();
+    const now = new Date().toISOString();
     const newBox: QueueBox = {
       ...boxData,
       category: determinedCategory,
       id: generateUniqueId('box'),
-      createdAt: nowIso,
-      contentUpdatedAt: nowIso,
+      createdAt: now,
+      contentUpdatedAt: now,
     };
     setBoxes(prev => [...prev, newBox]);
     showAppToast(`Kotak antrean "${newBox.title}" berhasil ditambahkan.`);

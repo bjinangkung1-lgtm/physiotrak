@@ -2626,7 +2626,7 @@ export const TherapistAnalyticsView: React.FC<TherapistAnalyticsViewProps> = ({
       {/* VIEW TAB 3: THERAPIST CARDS MATRIX */}
       {activeTab === 'cards' && (
         <div className="space-y-6">
-          {/* Grafik Tren Kunjungan: Harian Total, Harian per Divisi & Bulanan */}
+          {/* Visit Trend Charts (Daily Total, Daily by Division, Monthly Jan-Dec) */}
           <VisitTrendCharts />
 
           {/* Filters and Controls */}

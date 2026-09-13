@@ -1367,7 +1367,7 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
 
                         {/* Clean Metric Badges directly under speaker */}
                         {(() => {
-                           const metrics = calculatePatientTimeMetrics(patient, [box], currentTimeTick);
+                           const metrics = calculatePatientTimeMetrics(patient, [box], currentTimeTick, false);
                            return (
                             <div className="mt-0.5 flex items-center justify-end gap-1 text-[9px] font-mono leading-none">
                               <span 
@@ -1658,7 +1658,7 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                         )}
                         {/* Auto Response Time for Completed */}
                         {(() => {
-                          const metrics = calculatePatientTimeMetrics(patient, [box], currentTimeTick);
+                          const metrics = calculatePatientTimeMetrics(patient, [box], currentTimeTick, false);
                           return (
                             <div className="mt-0.5 flex items-center gap-2 text-[10px] text-slate-500 font-mono font-medium">
                               <span>⏱️ Respon Time: {metrics.formattedResponseTime}</span>

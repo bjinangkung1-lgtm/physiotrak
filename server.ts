@@ -786,7 +786,7 @@ function saveSecurityConfig(data: { appPassword?: string; databasePassword?: str
 }
 
 // Helper: sync patient array to today's daily archive and update master patient visits
-function syncPatientsToMasterAndArchive(patients: any[]) {
+function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   if (!Array.isArray(patients) || patients.length === 0) return;
 
   const today = getLocalDateStringWIB();
@@ -868,8 +868,10 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
   // 2. ACCUMULATIVE Sync to Daily Archive for today (DO NOT OVERWRITE OR WIPE PREVIOUS PATIENTS OF TODAY)
   const existingVisits = dailyArchive[today] || [];
   const visitsMap = new Map<string, any>();
-  const currentStateForBoxes = loadStateFromFile();
-  const currentBoxes = (currentStateForBoxes && Array.isArray(currentStateForBoxes.boxes)) ? currentStateForBoxes.boxes : [];
+  const currentStateForBoxes = (!boxes || !Array.isArray(boxes)) ? loadStateFromFile() : null;
+  const currentBoxes = (boxes && Array.isArray(boxes))
+    ? boxes
+    : ((currentStateForBoxes && Array.isArray(currentStateForBoxes.boxes)) ? currentStateForBoxes.boxes : []);
 
   // Keep all existing visits recorded today
   existingVisits.forEach((v: any) => {
@@ -917,17 +919,39 @@ function syncPatientsToMasterAndArchive(patients: any[]) {
 // Debounced master patient & daily archive synchronization helper
 let masterArchiveDebounceTimer: NodeJS.Timeout | null = null;
 let pendingMasterArchivePatients: any[] | null = null;
+let pendingMasterArchiveBoxes: any[] | null = null;
 
-function scheduleSyncPatientsToMasterAndArchive(patients: any[]) {
+function flushPendingMasterArchiveSync() {
+  if (masterArchiveDebounceTimer) {
+    clearTimeout(masterArchiveDebounceTimer);
+    masterArchiveDebounceTimer = null;
+    const toSyncP = pendingMasterArchivePatients;
+    const toSyncB = pendingMasterArchiveBoxes;
+    pendingMasterArchivePatients = null;
+    pendingMasterArchiveBoxes = null;
+    if (toSyncP) {
+      try {
+        syncPatientsToMasterAndArchive(toSyncP, toSyncB || undefined);
+      } catch (err) {
+        console.warn('[Shutdown] Gagal flush sinkronisasi arsip/master pasien:', err);
+      }
+    }
+  }
+}
+
+function scheduleSyncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   pendingMasterArchivePatients = patients;
+  if (boxes && Array.isArray(boxes)) pendingMasterArchiveBoxes = boxes;
   if (masterArchiveDebounceTimer) clearTimeout(masterArchiveDebounceTimer);
   masterArchiveDebounceTimer = setTimeout(() => {
     masterArchiveDebounceTimer = null;
-    const toSync = pendingMasterArchivePatients;
+    const toSyncP = pendingMasterArchivePatients;
+    const toSyncB = pendingMasterArchiveBoxes;
     pendingMasterArchivePatients = null;
-    if (toSync) {
+    pendingMasterArchiveBoxes = null;
+    if (toSyncP) {
       try {
-        syncPatientsToMasterAndArchive(toSync);
+        syncPatientsToMasterAndArchive(toSyncP, toSyncB || undefined);
       } catch (err) {
         console.error('[MasterArchiveSync] Deferred sync error:', err);
       }
@@ -1641,6 +1665,33 @@ async function hydrateStateFromFirestoreIfNeeded(): Promise<void> {
   }
 }
 
+// Helper: reconcile box content based on contentUpdatedAt recency to prevent race condition regressions
+function pickBoxContentBase(existing: any, incoming: any): any {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const exTime = existing.contentUpdatedAt ? new Date(existing.contentUpdatedAt).getTime() : 0;
+  const inTime = incoming.contentUpdatedAt ? new Date(incoming.contentUpdatedAt).getTime() : 0;
+  if (exTime > inTime) {
+    return {
+      ...incoming,
+      title: existing.title,
+      officerName: existing.officerName,
+      location: existing.location,
+      color: existing.color,
+      category: existing.category,
+      instructionText: existing.instructionText,
+      instructionImageUrl: existing.instructionImageUrl,
+      instructionImageUrls: existing.instructionImageUrls,
+      autoCallNext: existing.autoCallNext,
+      contentUpdatedAt: existing.contentUpdatedAt
+    };
+  }
+  return {
+    ...existing,
+    ...incoming
+  };
+}
+
 // Smart State Reconciliation Helper (prevents lost updates when 30+ devices sync simultaneously)
 function reconcileQueueStates(existingState: any, incomingPayload: any) {
   if (!existingState) existingState = getInitialServerState();
@@ -1783,26 +1834,6 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   const mergedRanapQueue = Array.from(ranapMap.values());
 
   // 2. Reconcile Boxes
-  // Recency-wins helper for box CONTENT fields (warna, judul, gambar, dll):
-  // tanpa ini, siapa pun yang broadcast full-state-nya sampai ke server
-  // PALING TERAKHIR akan menang untuk semua field, walau isinya lebih basi
-  // (mis. perangkat lain yang belum menerima perubahan warna terbaru lalu
-  // ikut menyiarkan ulang warna lama - inilah sebab warna kotak "reset
-  // sendiri" beberapa saat setelah diganti). Dengan watermark
-  // `contentUpdatedAt` per kotak, box yang timestamp-nya lebih baru yang
-  // menang untuk konten, sementara posisi/urutan tetap diatur terpisah oleh
-  // boxOrderUpdatedAt di atas.
-  const pickBoxContentBase = (existing: any, inB: any) => {
-    const existingContentTime = existing.contentUpdatedAt ? new Date(existing.contentUpdatedAt).getTime() : 0;
-    const incomingContentTime = inB.contentUpdatedAt ? new Date(inB.contentUpdatedAt).getTime() : 0;
-    const existingIsNewer = existingContentTime > incomingContentTime;
-    return {
-      base: existingIsNewer ? existing : inB,
-      other: existingIsNewer ? inB : existing,
-      contentUpdatedAt: existingIsNewer ? existing.contentUpdatedAt : (inB.contentUpdatedAt || existing.contentUpdatedAt)
-    };
-  };
-
   const existingBoxes: any[] = Array.isArray(existingState.boxes) ? existingState.boxes : [];
   const incomingBoxes: any[] = Array.isArray(incomingPayload.boxes) ? incomingPayload.boxes : [];
   const deletedBoxIds = new Set(Array.isArray(incomingPayload.deletedBoxIds) ? incomingPayload.deletedBoxIds : []);
@@ -1843,24 +1874,21 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       seenIds.add(inB.id);
       const existing = existingBoxMap.get(inB.id);
       if (existing) {
-        const { base: contentBase, other: contentOther, contentUpdatedAt } = pickBoxContentBase(existing, inB);
-
-        // Preserve instructionImageUrls if the winning content version did not supply them
-        let finalImageUrls = contentBase.instructionImageUrls;
-        if (finalImageUrls === undefined && contentOther.instructionImageUrls) {
-          finalImageUrls = contentOther.instructionImageUrls;
+        const base = pickBoxContentBase(existing, inB);
+        // Preserve instructionImageUrls if incoming did not supply them or passed undefined
+        let finalImageUrls = base.instructionImageUrls;
+        if (finalImageUrls === undefined && existing.instructionImageUrls) {
+          finalImageUrls = existing.instructionImageUrls;
         }
 
         mergedBoxes.push(sanitizeServerBox({
-          ...contentOther,
-          ...contentBase,
+          ...base,
           instructionImageUrls: finalImageUrls,
           instructionImageUrl: (Array.isArray(finalImageUrls) && finalImageUrls.length > 0)
             ? finalImageUrls[0]
-            : (contentBase.instructionImageUrl || contentOther.instructionImageUrl || undefined),
+            : (base.instructionImageUrl || undefined),
           order: typeof inB.order === 'number' ? inB.order : idx,
-          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput,
-          contentUpdatedAt
+          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput
         }));
       } else {
         mergedBoxes.push(sanitizeServerBox({
@@ -1895,23 +1923,20 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
 
       const inB = incomingBoxMap.get(existing.id);
       if (inB) {
-        const { base: contentBase, other: contentOther, contentUpdatedAt } = pickBoxContentBase(existing, inB);
-
-        let finalImageUrls = contentBase.instructionImageUrls;
-        if (finalImageUrls === undefined && contentOther.instructionImageUrls) {
-          finalImageUrls = contentOther.instructionImageUrls;
+        const base = pickBoxContentBase(existing, inB);
+        let finalImageUrls = base.instructionImageUrls;
+        if (finalImageUrls === undefined && existing.instructionImageUrls) {
+          finalImageUrls = existing.instructionImageUrls;
         }
 
         mergedBoxes.push(sanitizeServerBox({
-          ...contentOther,
-          ...contentBase,
+          ...base,
           instructionImageUrls: finalImageUrls,
           instructionImageUrl: (Array.isArray(finalImageUrls) && finalImageUrls.length > 0)
             ? finalImageUrls[0]
-            : (contentBase.instructionImageUrl || contentOther.instructionImageUrl || undefined),
+            : (base.instructionImageUrl || undefined),
           order: typeof existing.order === 'number' ? existing.order : idx,
-          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput,
-          contentUpdatedAt
+          hasUnreadNewInput: inB.hasUnreadNewInput !== undefined ? inB.hasUnreadNewInput : existing.hasUnreadNewInput
         }));
       } else {
         mergedBoxes.push(sanitizeServerBox({
@@ -2065,7 +2090,7 @@ app.post('/api/queue', async (req, res) => {
       console.log(`[QueueSync] Synced from device ${senderDeviceId || 'unknown'}: ${mergedState.patients.length} patients, ${mergedState.boxes.length} boxes.`);
 
       if (Array.isArray(mergedState.patients) && mergedState.patients.length > 0) {
-        scheduleSyncPatientsToMasterAndArchive(mergedState.patients);
+        scheduleSyncPatientsToMasterAndArchive(mergedState.patients, mergedState.boxes);
       }
     });
 
@@ -2694,11 +2719,7 @@ app.get('/api/monthly-report', (req, res) => {
   }
 });
 
-// Infer divisi terapi (fisio/okupasi/wicara) dari nama petugas/judul kotak
-// sebuah kunjungan arsip. Dipakai HANYA untuk analitik agregat (grafik
-// kunjungan), bukan sumber kebenaran data pasien - meniru aturan penamaan
-// yang sama dengan getTherapistCategory di src/utils/savedOfficersService.ts
-// supaya konsisten dengan cara divisi ditentukan di seluruh aplikasi.
+// Helper to infer therapy category from officer name and box title
 function inferVisitTherapyCategory(officerName?: string, boxTitle?: string, explicitCategory?: string): 'fisio' | 'okupasi' | 'wicara' {
   if (explicitCategory === 'fisio' || explicitCategory === 'okupasi' || explicitCategory === 'wicara') {
     return explicitCategory;
@@ -2719,23 +2740,7 @@ function inferVisitTherapyCategory(officerName?: string, boxTitle?: string, expl
   return 'fisio';
 }
 
-// GET /api/analytics/visit-trends?year=YYYY&month=MM
-// Data untuk grafik "Kunjungan Harian" (bulan tertentu) & "Kunjungan Bulanan"
-// (tahun tertentu) di tab Matriks Kartu Terapis. Dihitung dari arsip
-// kunjungan harian (daily_archive.json) + antrean aktif hari ini (kalau
-// tanggal/bulan/tahun yang diminta mencakup hari ini & belum sempat
-// terarsip).
-//
-// ATURAN HITUNG "Total" per hari: 1 pasien yang ditangani di 3 tempat
-// sekaligus (Fisio, Okupasi, Wicara) pada HARI YANG SAMA dihitung 1, bukan 3
-// - dideduplikasi berdasarkan No. Rekam Medis (fallback ke nama kalau RM
-// kosong). Untuk grafik per-divisi (Fisio/Okupasi/Wicara), tiap divisi
-// dihitung terpisah (dedup di dalam divisi yang sama saja, supaya rekam
-// medis ganda karena input ulang tidak dobel-hitung).
-//
-// "Kunjungan Bulanan": jumlah KUNJUNGAN (bukan pasien unik sepanjang bulan)
-// - satu pasien yang datang 5 hari berbeda dalam sebulan dihitung 5
-// kunjungan, karena tiap hari kedatangan adalah satu kunjungan terpisah.
+// GET /api/analytics/visit-trends?year=YYYY&month=M
 app.get('/api/analytics/visit-trends', (req, res) => {
   try {
     const now = new Date();
@@ -2748,9 +2753,6 @@ app.get('/api/analytics/visit-trends', (req, res) => {
     const dailyArchive = loadDailyArchive();
     const currentState = loadStateFromFile();
 
-    // Gabungkan arsip hari ini dengan antrean aktif LIVE (kalau hari ini
-    // belum sempat diarsipkan sepenuhnya), supaya grafik hari ini tetap
-    // akurat tanpa menunggu debounce arsip 1.5 detik selesai.
     const visitsByDate: Record<string, any[]> = {};
     Object.keys(dailyArchive).forEach((dateKey) => {
       if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey) && Array.isArray(dailyArchive[dateKey])) {
@@ -2768,11 +2770,14 @@ app.get('/api/analytics/visit-trends', (req, res) => {
       visitsByDate[today] = todayVisits;
     }
 
-    const dedupKey = (v: any) => (v.medicalRecordNo && String(v.medicalRecordNo).trim()) || (v.patientName && String(v.patientName).trim().toUpperCase()) || v.id;
+    const dedupKey = (v: any) =>
+      (v.medicalRecordNo && String(v.medicalRecordNo).trim()) ||
+      (v.patientName && String(v.patientName).trim().toUpperCase()) ||
+      v.id;
 
     const summarizeDay = (records: any[]) => {
       const totalSet = new Set<string>();
-      const catSets: Record<'fisio' | 'okupasi' | 'wicara', Set<string>> = { fisio: new Set(), okupasi: new Set(), wicara: new Set() };
+      const catSets = { fisio: new Set<string>(), okupasi: new Set<string>(), wicara: new Set<string>() };
       records.forEach((v) => {
         if (!v) return;
         const key = dedupKey(v);
@@ -2789,18 +2794,15 @@ app.get('/api/analytics/visit-trends', (req, res) => {
       };
     };
 
-    // --- Grafik Kunjungan Harian (bulan yang diminta) ---
     const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
-    const daily = [];
+    const daily: Array<{ date: string; day: number; total: number; fisio: number; okupasi: number; wicara: number }> = [];
     for (let day = 1; day <= daysInMonth; day++) {
       const dateKey = `${monthPrefix}-${String(day).padStart(2, '0')}`;
       const summary = summarizeDay(visitsByDate[dateKey] || []);
       daily.push({ date: dateKey, day, ...summary });
     }
 
-    // --- Grafik Kunjungan Bulanan (tahun yang diminta) ---
-    const monthlyBuckets: Array<{ total: number; fisio: number; okupasi: number; wicara: number }> =
-      Array.from({ length: 12 }, () => ({ total: 0, fisio: 0, okupasi: 0, wicara: 0 }));
+    const monthlyBuckets = Array.from({ length: 12 }, () => ({ total: 0, fisio: 0, okupasi: 0, wicara: 0 }));
     Object.keys(visitsByDate).forEach((dateKey) => {
       if (!dateKey.startsWith(yearPrefix)) return;
       const monthIdx = parseInt(dateKey.slice(5, 7), 10) - 1;
@@ -2813,13 +2815,7 @@ app.get('/api/analytics/visit-trends', (req, res) => {
     });
     const monthly = monthlyBuckets.map((bucket, idx) => ({ month: idx + 1, ...bucket }));
 
-    res.json({
-      status: 'ok',
-      year: targetYear,
-      month: targetMonth,
-      daily,
-      monthly,
-    });
+    res.json({ status: 'ok', year: targetYear, month: targetMonth, daily, monthly });
   } catch (error: any) {
     console.error('Error computing visit trends:', error);
     res.status(500).json({ error: error?.message || 'Gagal memuat data grafik kunjungan' });
@@ -3202,19 +3198,15 @@ app.post('/api/queue/box-images', async (req, res) => {
       const boxIdx = boxes.findIndex((b: any) => b.id === boxId);
 
       if (boxIdx >= 0) {
+        const stampedAt = new Date().toISOString();
         boxes[boxIdx] = {
           ...boxes[boxIdx],
           instructionImageUrls: cleanUrls,
           instructionImageUrl: cleanUrls[0] || undefined,
-          // WAJIB: endpoint ini menulis langsung ke state (bypass
-          // reconcileQueueStates), jadi kalau contentUpdatedAt tidak ikut
-          // di-bump di sini, foto yang baru saja diupload bisa hilang lagi
-          // ditimpa broadcast basi dari perangkat lain - persis bug yang
-          // coba dicegah oleh pickBoxContentBase (lihat reconcileQueueStates).
-          contentUpdatedAt: new Date().toISOString(),
+          contentUpdatedAt: stampedAt,
         };
         state.boxes = boxes;
-        state.lastUpdated = new Date().toISOString();
+        state.lastUpdated = stampedAt;
         saveStateToFile(state);
         broadcastUpdate({ type: 'SYNC_STATE', state, senderDeviceId });
       }
@@ -3571,29 +3563,6 @@ async function flushPendingFirestoreMirrors(): Promise<void> {
   if (tasks.length > 0) {
     console.log(`[Shutdown] Flushing ${tasks.length} pending Firestore mirror write(s)...`);
     await Promise.allSettled(tasks);
-  }
-}
-
-// syncPatientsToMasterAndArchive (arsip kunjungan harian & master pasien)
-// dijadwalkan lewat debounce 1.5 detik-nya SENDIRI (masterArchiveDebounceTimer),
-// terpisah dari 4 timer mirror Firestore di atas. Kalau proses di-restart
-// tepat di jendela 1.5 detik itu (mis. redeploy rutin), kunjungan yang baru
-// saja disinkronkan ke /api/queue hilang permanen dari daily_archive.json &
-// patients_master.json (padahal queue_store.json sudah menyimpannya) -
-// dipanggil paling awal di bawah supaya hasilnya (yang juga menjadwalkan
-// mirror Firestore baru) ikut sempat di-flush oleh flushPendingFirestoreMirrors.
-function flushPendingMasterArchiveSync(): void {
-  if (masterArchiveDebounceTimer) {
-    clearTimeout(masterArchiveDebounceTimer);
-    masterArchiveDebounceTimer = null;
-    if (pendingMasterArchivePatients) {
-      try {
-        syncPatientsToMasterAndArchive(pendingMasterArchivePatients);
-      } catch (err) {
-        console.warn('[Shutdown] Gagal flush sinkronisasi arsip/master pasien:', err);
-      }
-      pendingMasterArchivePatients = null;
-    }
   }
 }
 
