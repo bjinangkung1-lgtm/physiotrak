@@ -55,6 +55,7 @@ import {
   EquipmentRatingItem,
   KNOWN_EQUIPMENT
 } from '../utils/equipmentAnalytics';
+import { VisitTrendCharts } from './VisitTrendCharts';
 
 interface TherapistAnalyticsViewProps {
   boxes: QueueBox[];
@@ -2625,6 +2626,9 @@ export const TherapistAnalyticsView: React.FC<TherapistAnalyticsViewProps> = ({
       {/* VIEW TAB 3: THERAPIST CARDS MATRIX */}
       {activeTab === 'cards' && (
         <div className="space-y-6">
+          {/* Grafik Tren Kunjungan: Harian Total, Harian per Divisi & Bulanan */}
+          <VisitTrendCharts />
+
           {/* Filters and Controls */}
           <div className="bg-white rounded-3xl p-5 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-4">
             <div className="relative flex-1 min-w-[260px]">

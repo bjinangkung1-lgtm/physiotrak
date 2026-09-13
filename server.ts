@@ -2694,6 +2694,138 @@ app.get('/api/monthly-report', (req, res) => {
   }
 });
 
+// Infer divisi terapi (fisio/okupasi/wicara) dari nama petugas/judul kotak
+// sebuah kunjungan arsip. Dipakai HANYA untuk analitik agregat (grafik
+// kunjungan), bukan sumber kebenaran data pasien - meniru aturan penamaan
+// yang sama dengan getTherapistCategory di src/utils/savedOfficersService.ts
+// supaya konsisten dengan cara divisi ditentukan di seluruh aplikasi.
+function inferVisitTherapyCategory(officerName?: string, boxTitle?: string, explicitCategory?: string): 'fisio' | 'okupasi' | 'wicara' {
+  if (explicitCategory === 'fisio' || explicitCategory === 'okupasi' || explicitCategory === 'wicara') {
+    return explicitCategory;
+  }
+  const full = `${(officerName || '').toLowerCase()} ${(boxTitle || '').toLowerCase()}`;
+  if (
+    full.includes('monalisa') || full.includes('kalya') || full.includes('wicara') ||
+    full.includes('speech') || full.includes('a.md.tw') || full.includes('s.tr.tw') || /\btw\b/i.test(full)
+  ) {
+    return 'wicara';
+  }
+  if (
+    full.includes('cecep') || full.includes('gunandar') || full.includes('putri') ||
+    full.includes('okupasi') || full.includes('occupational') || full.includes('a.md.ot') || full.includes('s.tr.ot') || /\bot\b/i.test(full)
+  ) {
+    return 'okupasi';
+  }
+  return 'fisio';
+}
+
+// GET /api/analytics/visit-trends?year=YYYY&month=MM
+// Data untuk grafik "Kunjungan Harian" (bulan tertentu) & "Kunjungan Bulanan"
+// (tahun tertentu) di tab Matriks Kartu Terapis. Dihitung dari arsip
+// kunjungan harian (daily_archive.json) + antrean aktif hari ini (kalau
+// tanggal/bulan/tahun yang diminta mencakup hari ini & belum sempat
+// terarsip).
+//
+// ATURAN HITUNG "Total" per hari: 1 pasien yang ditangani di 3 tempat
+// sekaligus (Fisio, Okupasi, Wicara) pada HARI YANG SAMA dihitung 1, bukan 3
+// - dideduplikasi berdasarkan No. Rekam Medis (fallback ke nama kalau RM
+// kosong). Untuk grafik per-divisi (Fisio/Okupasi/Wicara), tiap divisi
+// dihitung terpisah (dedup di dalam divisi yang sama saja, supaya rekam
+// medis ganda karena input ulang tidak dobel-hitung).
+//
+// "Kunjungan Bulanan": jumlah KUNJUNGAN (bukan pasien unik sepanjang bulan)
+// - satu pasien yang datang 5 hari berbeda dalam sebulan dihitung 5
+// kunjungan, karena tiap hari kedatangan adalah satu kunjungan terpisah.
+app.get('/api/analytics/visit-trends', (req, res) => {
+  try {
+    const now = new Date();
+    const targetYear = req.query.year ? parseInt(req.query.year as string, 10) : now.getFullYear();
+    const targetMonth = req.query.month ? parseInt(req.query.month as string, 10) : now.getMonth() + 1;
+    const monthPrefix = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+    const yearPrefix = `${targetYear}-`;
+
+    const today = getLocalDateStringWIB();
+    const dailyArchive = loadDailyArchive();
+    const currentState = loadStateFromFile();
+
+    // Gabungkan arsip hari ini dengan antrean aktif LIVE (kalau hari ini
+    // belum sempat diarsipkan sepenuhnya), supaya grafik hari ini tetap
+    // akurat tanpa menunggu debounce arsip 1.5 detik selesai.
+    const visitsByDate: Record<string, any[]> = {};
+    Object.keys(dailyArchive).forEach((dateKey) => {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey) && Array.isArray(dailyArchive[dateKey])) {
+        visitsByDate[dateKey] = dailyArchive[dateKey];
+      }
+    });
+    if (currentState && Array.isArray(currentState.patients) && currentState.patients.length > 0) {
+      const todayVisits = visitsByDate[today] ? [...visitsByDate[today]] : [];
+      const existingIds = new Set(todayVisits.map((v: any) => v.id));
+      currentState.patients.forEach((qp: any) => {
+        if (!existingIds.has(qp.id)) {
+          todayVisits.push({ ...qp, visitDate: today, registeredAt: qp.createdAt || new Date().toISOString() });
+        }
+      });
+      visitsByDate[today] = todayVisits;
+    }
+
+    const dedupKey = (v: any) => (v.medicalRecordNo && String(v.medicalRecordNo).trim()) || (v.patientName && String(v.patientName).trim().toUpperCase()) || v.id;
+
+    const summarizeDay = (records: any[]) => {
+      const totalSet = new Set<string>();
+      const catSets: Record<'fisio' | 'okupasi' | 'wicara', Set<string>> = { fisio: new Set(), okupasi: new Set(), wicara: new Set() };
+      records.forEach((v) => {
+        if (!v) return;
+        const key = dedupKey(v);
+        if (!key) return;
+        totalSet.add(key);
+        const cat = inferVisitTherapyCategory(v.officerName, v.boxTitle, v.category);
+        catSets[cat].add(key);
+      });
+      return {
+        total: totalSet.size,
+        fisio: catSets.fisio.size,
+        okupasi: catSets.okupasi.size,
+        wicara: catSets.wicara.size,
+      };
+    };
+
+    // --- Grafik Kunjungan Harian (bulan yang diminta) ---
+    const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+    const daily = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateKey = `${monthPrefix}-${String(day).padStart(2, '0')}`;
+      const summary = summarizeDay(visitsByDate[dateKey] || []);
+      daily.push({ date: dateKey, day, ...summary });
+    }
+
+    // --- Grafik Kunjungan Bulanan (tahun yang diminta) ---
+    const monthlyBuckets: Array<{ total: number; fisio: number; okupasi: number; wicara: number }> =
+      Array.from({ length: 12 }, () => ({ total: 0, fisio: 0, okupasi: 0, wicara: 0 }));
+    Object.keys(visitsByDate).forEach((dateKey) => {
+      if (!dateKey.startsWith(yearPrefix)) return;
+      const monthIdx = parseInt(dateKey.slice(5, 7), 10) - 1;
+      if (monthIdx < 0 || monthIdx > 11) return;
+      const summary = summarizeDay(visitsByDate[dateKey]);
+      monthlyBuckets[monthIdx].total += summary.total;
+      monthlyBuckets[monthIdx].fisio += summary.fisio;
+      monthlyBuckets[monthIdx].okupasi += summary.okupasi;
+      monthlyBuckets[monthIdx].wicara += summary.wicara;
+    });
+    const monthly = monthlyBuckets.map((bucket, idx) => ({ month: idx + 1, ...bucket }));
+
+    res.json({
+      status: 'ok',
+      year: targetYear,
+      month: targetMonth,
+      daily,
+      monthly,
+    });
+  } catch (error: any) {
+    console.error('Error computing visit trends:', error);
+    res.status(500).json({ error: error?.message || 'Gagal memuat data grafik kunjungan' });
+  }
+});
+
 // GET /api/officers - Retrieve saved officers / therapists
 app.get('/api/officers', (req, res) => {
   const state = loadStateFromFile() || {};
