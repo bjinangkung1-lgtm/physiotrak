@@ -457,17 +457,18 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Metric Counter Pills */}
+          {/* Hanya 2 status nyata yang dilacak: pasien di-input -> "Menunggu",
+              pasien di-ceklis -> "Dipanggil" (panggil & selesai digabung jadi
+              satu aksi ceklis). Pill "Proses" dihapus karena dulu nilainya
+              selalu identik dengan "Menunggu" (sama-sama totalActiveCount),
+              jadi tidak pernah mewakili status yang benar-benar berbeda. */}
           <div className="hidden md:flex items-center gap-3 lg:gap-4 border-r border-slate-800 pr-3 lg:pr-4">
             <div className="text-center">
               <p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Menunggu</p>
               <p className="text-base lg:text-lg font-black text-cyan-400 leading-none">{totalActiveCount}</p>
             </div>
             <div className="text-center">
-              <p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Proses</p>
-              <p className="text-base lg:text-lg font-black text-amber-400 leading-none">{totalActiveCount > 0 ? totalActiveCount : 0}</p>
-            </div>
-            <div className="text-center">
-              <p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Selesai</p>
+              <p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Dipanggil</p>
               <p className="text-base lg:text-lg font-black text-emerald-400 leading-none">{totalCompletedCount}</p>
             </div>
           </div>
