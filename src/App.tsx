@@ -67,43 +67,45 @@ export const normalizeAndMergeBoxes = (rawList: any[]): QueueBox[] => {
     .map((b: QueueBox) => {
       let officerName = b.officerName || '';
       let category = b.category;
-      let id = b.id;
+      // PENTING: `id` kotak TIDAK PERNAH ditulis ulang di sini lagi (dulu dipaksa
+      // berubah berdasarkan kecocokan nama, mis. officerName mengandung "monalisa"
+      // -> id dipaksa jadi 'box-monalisa'). Itu berbahaya: begitu 2 kotak sama-sama
+      // "dipaksa" ke id yang sama (mis. staf ganti nama kotak lain jadi mengandung
+      // kata yang sama), keduanya tabrakan lalu salah satunya dibuang di langkah
+      // dedup di bawah - kotak itu hilang dari layar. Id sekarang dibuat SEKALI
+      // saat kotak pertama kali dibuat (lihat handleAddBox) dan tidak pernah
+      // berubah lagi oleh normalisasi ini - nama/kategori/judul tetap dirapikan
+      // otomatis seperti biasa (aman, murni tampilan), cuma id yang dikunci.
+      const id = b.id;
       let title = (b.title || '').trim();
 
       if (id === 'box-monalisa' || officerName.toLowerCase().includes('monalisa')) {
         officerName = 'Monalisa';
         category = 'wicara';
-        id = 'box-monalisa';
         title = 'MONALISA';
       } else if (id === 'box-kalya' || officerName.toLowerCase().includes('kalya')) {
         officerName = 'Kalya';
         category = 'wicara';
-        id = 'box-kalya';
         title = 'KALYA';
       } else if (id === 'box-cecep' || officerName.toLowerCase().includes('cecep')) {
         officerName = 'Cecep, A.Md.OT';
         category = 'okupasi';
-        id = 'box-cecep';
         title = 'CECEP';
       } else if (id === 'box-gunandar' || officerName.toLowerCase().includes('gunandar')) {
         officerName = 'Gunandar, A.Md.OT';
         category = 'okupasi';
-        id = 'box-gunandar';
         title = 'GUNANDAR';
       } else if (id === 'box-putri' || officerName.toLowerCase().includes('putri')) {
         officerName = 'Putri, A.Md.OT';
         category = 'okupasi';
-        id = 'box-putri';
         title = 'PUTRI';
       } else if (id === 'box-ariq' || officerName.toLowerCase().includes('ariq')) {
         officerName = 'Ariq Muafa Adli, Amd.Ft';
         category = 'fisio';
-        id = 'box-ariq';
         title = 'ARIQ';
       } else if (id === 'box-peralihan-siang' || officerName.toLowerCase().includes('peralihan') || b.title?.toLowerCase().includes('peralihan')) {
         officerName = b.officerName || 'Petugas Shift Siang';
         category = 'fisio';
-        id = 'box-peralihan-siang';
         title = 'PERALIHAN SIANG';
       } else if (id === 'box-jemputan') {
         title = 'ANTRIAN JEMPUTAN RANAP IRM RSPP';
@@ -1123,6 +1125,18 @@ export default function App() {
   }, []);
 
   const handleUpdateBox = (updatedBox: QueueBox) => {
+    // Cegah kotak ini "bertabrakan" dengan kotak lain yang masih aktif untuk
+    // terapis yang sama - kalau dibiarkan, keduanya akan dianggap 1 kotak
+    // kembar dan salah satunya hilang dari layar di langkah dedup. Kalau
+    // memang berniat menggabungkan 2 kotak jadi 1, gunakan Hapus Kotak dengan
+    // opsi pindahkan pasien, bukan ganti nama.
+    const newKey = getCanonicalTherapistKey(updatedBox.officerName, updatedBox.location, updatedBox.id);
+    const collidesWith = boxes.find(b => b.id !== updatedBox.id && getCanonicalTherapistKey(b.officerName, b.location, b.id) === newKey);
+    if (collidesWith) {
+      showAppToast(`Nama "${updatedBox.officerName}" sudah dipakai kotak "${collidesWith.title}". Gunakan nama lain, atau hapus salah satu kotak dengan opsi pindahkan pasien kalau memang ingin digabungkan.`);
+      return;
+    }
+
     hasLocalMutationRef.current = true;
     const stamped = { ...updatedBox, contentUpdatedAt: new Date().toISOString() };
     setBoxes(prev => prev.map(b => b.id === stamped.id ? stamped : b));
@@ -1674,6 +1688,17 @@ export default function App() {
 
   // Add New Box
   const handleAddBox = (boxData: Omit<QueueBox, 'id' | 'createdAt'>) => {
+    // Cegah bikin kotak duplikat untuk terapis yang sama - kalau dibiarkan,
+    // kotak baru ini akan langsung "hilang lagi" di sinkronisasi berikutnya
+    // karena dianggap kembar dari kotak yang sudah ada (lihat langkah dedup
+    // di normalizeAndMergeBoxes).
+    const newKey = getCanonicalTherapistKey(boxData.officerName, boxData.location, '');
+    const collidesWith = boxes.find(b => getCanonicalTherapistKey(b.officerName, b.location, b.id) === newKey);
+    if (collidesWith) {
+      showAppToast(`Kotak untuk "${boxData.officerName}" sudah ada ("${collidesWith.title}"). Edit kotak yang sudah ada itu, jangan buat baru.`);
+      return;
+    }
+
     hasLocalMutationRef.current = true;
     const determinedCategory = boxData.category || getTherapistCategory(boxData.officerName, boxData.location) || 'fisio';
     const now = new Date().toISOString();
