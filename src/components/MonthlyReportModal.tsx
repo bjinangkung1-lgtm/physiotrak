@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileText, Download, FileSpreadsheet, Calendar, CheckCircle2, User, Users, Hospital, Tag, Search, Trophy, Loader2, Database } from 'lucide-react';
+import { X, FileText, Download, FileSpreadsheet, Calendar, CheckCircle2, User, Users, Hospital, Tag, Search, Trophy, Loader2, Database, ArrowLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { QueueBox, PatientItem, DailyPatientVisit } from '../types';
 import { exportMonthlyTherapistPDF, exportMonthlyTherapistExcel, MonthlyReportData } from '../utils/export';
 import { cloudDatabaseService } from '../utils/cloudDatabaseService';
@@ -26,6 +26,9 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [monthlyVisits, setMonthlyVisits] = useState<DailyPatientVisit[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  // Drill-down: tabel harian untuk 1 terapis, dibuka dengan klik nama terapisnya
+  const [drilldownTherapist, setDrilldownTherapist] = useState<string | null>(null);
+  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
 
   const [yearStr, monthStr] = selectedYearMonth.split('-');
   const selectedYear = parseInt(yearStr, 10);
@@ -254,6 +257,42 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
     }).filter(g => g.patients.length > 0 || g.therapistName.toLowerCase().includes(q));
   }
 
+  // Rincian harian untuk terapis yang sedang di-drill-down (klik nama terapis)
+  interface DailyBreakdown {
+    date: string;
+    total: number;
+    rajal: number;
+    ranap: number;
+    actionCounts: { [code: string]: number };
+    patients: PatientItem[];
+  }
+  const drilldownGroup = drilldownTherapist ? therapistMap.get(drilldownTherapist) || null : null;
+  const dailyBreakdown: DailyBreakdown[] = (() => {
+    if (!drilldownGroup) return [];
+    const map = new Map<string, DailyBreakdown>();
+    drilldownGroup.patients.forEach((p: any) => {
+      const raw = p.visitDate || p.completedAt || p.createdAt || p.registeredAt;
+      const dateKey = raw ? String(raw).slice(0, 10) : 'Tidak Diketahui';
+      if (!map.has(dateKey)) {
+        map.set(dateKey, { date: dateKey, total: 0, rajal: 0, ranap: 0, actionCounts: {}, patients: [] });
+      }
+      const day = map.get(dateKey)!;
+      day.total += 1;
+      if (p.isRanap) day.ranap += 1; else day.rajal += 1;
+      const code = p.actionCode ? p.actionCode.toUpperCase() : 'TANPA KODE';
+      day.actionCounts[code] = (day.actionCounts[code] || 0) + 1;
+      day.patients.push(p);
+    });
+    return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
+  })();
+  const toggleDateExpand = (date: string) => {
+    setExpandedDates(prev => {
+      const next = new Set(prev);
+      if (next.has(date)) next.delete(date); else next.add(date);
+      return next;
+    });
+  };
+
   // Calculate totals
   const totalCompletedMonth = completedPatientsInMonth.length;
   const totalRanapMonth = completedPatientsInMonth.filter(p => p.isRanap).length;
@@ -408,6 +447,138 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
+          {drilldownTherapist && drilldownGroup ? (
+          <div className="space-y-4">
+            <button
+              onClick={() => setDrilldownTherapist(null)}
+              className="flex items-center gap-1.5 text-xs font-bold text-teal-700 hover:text-teal-900 cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Kembali ke Ringkasan Bulanan</span>
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-teal-600 text-white font-black flex items-center justify-center text-base shadow-xs shrink-0">
+                {drilldownTherapist.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <h4 className="font-black text-base text-slate-900">{drilldownTherapist}</h4>
+                <p className="text-xs text-slate-500 font-semibold">Rincian Harian — {selectedMonthName} • {drilldownGroup.boxTitle}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl">
+                <p className="text-[11px] font-bold text-teal-800">Total Bulan Ini</p>
+                <p className="text-xl font-black text-teal-950">{drilldownGroup.patients.length} Pasien</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                <p className="text-[11px] font-bold text-slate-700">Rajal</p>
+                <p className="text-xl font-black text-slate-900">{drilldownGroup.rajalCount} Pasien</p>
+              </div>
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
+                <p className="text-[11px] font-bold text-blue-800">Ranap</p>
+                <p className="text-xl font-black text-blue-950">{drilldownGroup.ranapCount} Pasien</p>
+              </div>
+            </div>
+
+            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-2.5 w-6"></th>
+                    <th className="p-2.5">Tanggal</th>
+                    <th className="p-2.5 text-center">Total Pasien</th>
+                    <th className="p-2.5 text-center">Rajal</th>
+                    <th className="p-2.5 text-center">Ranap</th>
+                    <th className="p-2.5">Rincian Kode Tindakan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dailyBreakdown.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-4 text-center text-slate-400 italic">
+                        Belum ada data harian untuk terapis ini di bulan {selectedMonthName}.
+                      </td>
+                    </tr>
+                  ) : (
+                    dailyBreakdown.map((day) => {
+                      const isExpanded = expandedDates.has(day.date);
+                      const dateLabel = day.date === 'Tidak Diketahui'
+                        ? day.date
+                        : new Date(day.date).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+                      return (
+                        <React.Fragment key={day.date}>
+                          <tr
+                            className="hover:bg-slate-50/80 transition-colors cursor-pointer"
+                            onClick={() => toggleDateExpand(day.date)}
+                          >
+                            <td className="p-2.5 text-center text-slate-400">
+                              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                            </td>
+                            <td className="p-2.5 font-bold text-slate-900">{dateLabel}</td>
+                            <td className="p-2.5 text-center font-black text-teal-800">{day.total}</td>
+                            <td className="p-2.5 text-center font-semibold text-slate-700">{day.rajal}</td>
+                            <td className="p-2.5 text-center font-semibold text-blue-800">{day.ranap}</td>
+                            <td className="p-2.5">
+                              <div className="flex flex-wrap gap-1">
+                                {Object.entries(day.actionCounts).map(([code, count]) => (
+                                  <span key={code} className="px-1.5 py-0.5 bg-teal-50 border border-teal-200 text-teal-800 text-[10px] font-bold rounded">
+                                    {code}: {count}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={6} className="p-0 bg-slate-50/60">
+                                <table className="w-full text-[11px] text-left">
+                                  <thead className="text-slate-500 font-bold border-b border-slate-200">
+                                    <tr>
+                                      <th className="p-2 pl-8">Nama Pasien</th>
+                                      <th className="p-2">No. RM</th>
+                                      <th className="p-2">Kode Tindakan</th>
+                                      <th className="p-2">Waktu</th>
+                                      <th className="p-2 text-center">Tipe</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-200">
+                                    {day.patients.map((p: any, idx: number) => (
+                                      <tr key={`${day.date}-${p.id || idx}`}>
+                                        <td className="p-2 pl-8 font-bold text-slate-800">
+                                          {p.patientName}
+                                          {p.isWarning && <span className="ml-1 text-rose-600">🛑</span>}
+                                        </td>
+                                        <td className="p-2 font-mono text-slate-600">{p.medicalRecordNo}</td>
+                                        <td className="p-2 text-teal-800">{p.actionCode || '-'}</td>
+                                        <td className="p-2 font-mono text-slate-500">
+                                          {(p.completedAt || p.createdAt) ? new Date(p.completedAt || p.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                                        </td>
+                                        <td className="p-2 text-center">
+                                          {p.isRanap ? (
+                                            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-900 font-black text-[9px] rounded">RANAP</span>
+                                          ) : (
+                                            <span className="px-1.5 py-0.5 bg-slate-100 text-slate-700 font-semibold text-[9px] rounded">RAJAL</span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          ) : (
+          <>
           {/* Executive Metrics Overview */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 bg-teal-50 border border-teal-200 rounded-2xl">
@@ -476,7 +647,13 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
                       </div>
                       <div>
                         <h5 className="font-black text-sm text-white flex items-center gap-2">
-                          <span>{group.therapistName}</span>
+                          <button
+                            onClick={() => { setDrilldownTherapist(group.therapistName); setExpandedDates(new Set()); }}
+                            className="hover:underline decoration-2 underline-offset-2 cursor-pointer text-left"
+                            title={`Lihat tabel harian ${group.therapistName}`}
+                          >
+                            {group.therapistName}
+                          </button>
                           <span className="text-[11px] font-semibold text-slate-300 bg-slate-800 px-2 py-0.5 rounded-md">
                             {group.boxTitle} ({group.location})
                           </span>
@@ -574,6 +751,8 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
               ))
             )}
           </div>
+          </>
+          )}
         </div>
 
         {/* Modal Footer */}
