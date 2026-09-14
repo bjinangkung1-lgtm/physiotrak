@@ -38,7 +38,8 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'queue_store.json');
 const MASTER_PATIENTS_FILE = path.join(DATA_DIR, 'patients_master.json');
-const DAILY_ARCHIVE_FILE = path.join(DATA_DIR, 'daily_archive.json');
+const DAILY_ARCHIVE_DIR = path.join(DATA_DIR, 'daily_archive');
+const LEGACY_DAILY_ARCHIVE_FILE = path.join(DATA_DIR, 'daily_archive.json');
 const RANAP_HISTORY_FILE = path.join(DATA_DIR, 'ranap_history.json');
 const PHOTOS_DB_FILE = path.join(DATA_DIR, 'photos_db.json');
 const LAIN_LAIN_DB_FILE = path.join(DATA_DIR, 'lain_lain_db.json');
@@ -261,32 +262,176 @@ function saveMasterPatients(patients: any[]) {
   mirrorMasterPatientsToFirestore(patients);
 }
 
-// Daily Archive File Helpers (Map of date YYYY-MM-DD -> list of DailyPatientVisit)
-function loadDailyArchive(): Record<string, any[]> {
+// Daily Archive File Helpers - Map tanggal (YYYY-MM-DD) -> daftar DailyPatientVisit,
+// disimpan SATU FILE PER BULAN (data/daily_archive/YYYY-MM.json) alih-alih satu file
+// raksasa berisi seluruh riwayat sejak awal aplikasi dipakai. Alasannya: dulu setiap
+// perubahan 1 pasien memicu baca+tulis SELURUH riwayat (bisa bertahun-tahun) secara
+// synchronous (blocking event loop, jadi seluruh server macet sesaat untuk SEMUA
+// perangkat yang sedang connect) - dan file itu makin besar & makin lambat setiap
+// hari. Dengan dipecah per-bulan, tiap penyimpanan HANYA menyentuh file bulan
+// berjalan (kecil & cepat, ukurannya tidak pernah bertambah dari bulan ke bulan).
+// TIDAK ADA DATA YANG DIHAPUS - hanya dikelompokkan ulang; laporan lintas-bulan/
+// tahun (remunerasi, rekap bulanan, backup) tetap membaca seluruh bulan yang relevan.
+function monthKeyOfDate(dateKey: string): string {
+  return dateKey.slice(0, 7);
+}
+
+function archiveMonthFilePath(monthKey: string): string {
+  return path.join(DAILY_ARCHIVE_DIR, `${monthKey}.json`);
+}
+
+function loadArchiveMonth(monthKey: string): Record<string, any[]> {
   try {
-    if (fs.existsSync(DAILY_ARCHIVE_FILE)) {
-      const content = fs.readFileSync(DAILY_ARCHIVE_FILE, 'utf-8');
-      const parsed = JSON.parse(content);
+    const p = archiveMonthFilePath(monthKey);
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
       if (parsed && typeof parsed === 'object') {
         return parsed;
       }
     }
   } catch (err) {
-    console.error('Error reading DAILY_ARCHIVE_FILE:', err);
+    console.error(`Error reading archive month ${monthKey}:`, err);
   }
-
-  const initial = {};
-  saveDailyArchive(initial);
-  return initial;
+  return {};
 }
 
-function saveDailyArchive(archive: Record<string, any[]>) {
+// Tulis ke disk saja, TANPA memicu mirror ke Firestore - dipakai saat memulihkan
+// data DARI Firestore, supaya tidak langsung menulis balik ke dokumen yang baru
+// saja dibaca.
+function saveArchiveMonthLocalOnly(monthKey: string, data: Record<string, any[]>) {
   try {
-    safeAtomicWriteJson(DAILY_ARCHIVE_FILE, archive);
+    if (!fs.existsSync(DAILY_ARCHIVE_DIR)) fs.mkdirSync(DAILY_ARCHIVE_DIR, { recursive: true });
+    safeAtomicWriteJson(archiveMonthFilePath(monthKey), data);
   } catch (err) {
-    console.error('Error writing DAILY_ARCHIVE_FILE:', err);
+    console.error(`Error writing archive month ${monthKey}:`, err);
   }
-  mirrorDailyArchiveToFirestore(archive);
+}
+
+function saveArchiveMonth(monthKey: string, data: Record<string, any[]>) {
+  saveArchiveMonthLocalOnly(monthKey, data);
+  mirrorArchiveMonthToFirestore(monthKey, data);
+}
+
+function listArchiveMonthKeys(): string[] {
+  try {
+    if (!fs.existsSync(DAILY_ARCHIVE_DIR)) return [];
+    return fs.readdirSync(DAILY_ARCHIVE_DIR)
+      .filter((f) => /^\d{4}-\d{2}\.json$/.test(f))
+      .map((f) => f.replace(/\.json$/, ''))
+      .sort();
+  } catch (err) {
+    console.error('Error listing archive months:', err);
+    return [];
+  }
+}
+
+// Baca kunjungan untuk SATU tanggal saja - hanya menyentuh file bulan tanggal itu.
+function loadDailyArchiveForDate(date: string): any[] {
+  return loadArchiveMonth(monthKeyOfDate(date))[date] || [];
+}
+
+// Tulis kunjungan untuk SATU tanggal saja - hanya menyentuh file bulan tanggal itu.
+function saveDailyArchiveForDate(date: string, visits: any[]) {
+  const monthKey = monthKeyOfDate(date);
+  const monthData = loadArchiveMonth(monthKey);
+  monthData[date] = visits;
+  saveArchiveMonth(monthKey, monthData);
+}
+
+// Baca seluruh tanggal dalam SATU bulan (mis. untuk rekap/laporan bulanan) -
+// hanya menyentuh 1 file.
+function loadDailyArchiveForMonth(monthKey: string): Record<string, any[]> {
+  return loadArchiveMonth(monthKey);
+}
+
+// Baca seluruh tanggal dalam SATU tahun (mis. untuk grafik kunjungan tahunan) -
+// hanya menyentuh maksimal 12 file, bukan seluruh riwayat sejak awal.
+function loadDailyArchiveForYear(year: number): Record<string, any[]> {
+  const result: Record<string, any[]> = {};
+  for (let m = 1; m <= 12; m++) {
+    const monthKey = `${year}-${String(m).padStart(2, '0')}`;
+    Object.assign(result, loadArchiveMonth(monthKey));
+  }
+  return result;
+}
+
+// Daftar SEMUA tanggal yang pernah tercatat, diurutkan terbaru dulu - dipakai untuk
+// dropdown pemilih tanggal, jadi cuma perlu key-nya saja (bukan seluruh data kunjungan).
+function listAllArchiveDateKeys(): string[] {
+  const dates: string[] = [];
+  for (const monthKey of listArchiveMonthKeys()) {
+    dates.push(...Object.keys(loadArchiveMonth(monthKey)));
+  }
+  return dates.sort().reverse();
+}
+
+// Baca SELURUH riwayat lintas semua bulan - HANYA dipakai untuk operasi jarang
+// seperti export/restore backup lengkap, jangan dipanggil pada jalur yang berjalan
+// setiap ada perubahan pasien.
+function loadFullDailyArchive(): Record<string, any[]> {
+  const result: Record<string, any[]> = {};
+  for (const monthKey of listArchiveMonthKeys()) {
+    Object.assign(result, loadArchiveMonth(monthKey));
+  }
+  return result;
+}
+
+// Ratakan objek arsip yang mungkin punya kunci non-tanggal yang membungkus
+// tanggal-tanggal lain di dalamnya (mis. ditemukan kunci "archives" berisi
+// {"2026-09-08": [...]} bersebelahan dengan tanggal-tanggal biasa di level atas -
+// kemungkinan sisa bug penyimpanan versi lama). Ditelusuri rekursif supaya TIDAK
+// ADA kunjungan yang diam-diam terlewat/hilang saat migrasi hanya karena
+// strukturnya tidak rata.
+function flattenArchiveDates(raw: any, out: Record<string, any[]> = {}): Record<string, any[]> {
+  if (!raw || typeof raw !== 'object') return out;
+  Object.keys(raw).forEach((key) => {
+    const value = raw[key];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(key) && Array.isArray(value)) {
+      const existing = out[key] || [];
+      const map = new Map<string, any>();
+      existing.forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
+      value.forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
+      out[key] = Array.from(map.values());
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      flattenArchiveDates(value, out);
+    }
+  });
+  return out;
+}
+
+// Tulis SELURUH objek arsip (mis. dari restore backup lama berformat satu-file),
+// otomatis dipecah ulang per bulan.
+function saveFullDailyArchive(archive: Record<string, any[]>) {
+  const flattened = flattenArchiveDates(archive);
+  const byMonth = new Map<string, Record<string, any[]>>();
+  Object.keys(flattened).forEach((dateKey) => {
+    const monthKey = monthKeyOfDate(dateKey);
+    if (!byMonth.has(monthKey)) byMonth.set(monthKey, {});
+    byMonth.get(monthKey)![dateKey] = flattened[dateKey];
+  });
+  byMonth.forEach((data, monthKey) => saveArchiveMonth(monthKey, data));
+}
+
+// Migrasi satu kali: kalau file lama daily_archive.json (satu file berisi semua
+// tanggal) masih ada, pecah jadi file per-bulan lalu simpan file lama sebagai
+// backup (di-rename, TIDAK dihapus) supaya data tidak pernah hilang.
+function migrateLegacyDailyArchiveIfNeeded() {
+  try {
+    if (!fs.existsSync(LEGACY_DAILY_ARCHIVE_FILE)) return;
+    const raw = fs.readFileSync(LEGACY_DAILY_ARCHIVE_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const flattened = flattenArchiveDates(parsed);
+    const dateCount = Object.keys(flattened).length;
+    if (dateCount > 0) {
+      console.log(`[Migration] Memecah daily_archive.json lama (${dateCount} tanggal) menjadi file per-bulan...`);
+      saveFullDailyArchive(flattened);
+    }
+    const backupPath = `${LEGACY_DAILY_ARCHIVE_FILE}.migrated-${Date.now()}.bak`;
+    fs.renameSync(LEGACY_DAILY_ARCHIVE_FILE, backupPath);
+    console.log(`[Migration] daily_archive.json lama diamankan sebagai backup: ${path.basename(backupPath)}`);
+  } catch (err) {
+    console.error('[Migration] Gagal memecah daily_archive.json lama:', err);
+  }
 }
 
 // Ranap History File Helpers
@@ -791,7 +936,6 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
 
   const today = getLocalDateStringWIB();
   const masterPatients = loadMasterPatients();
-  const dailyArchive = loadDailyArchive();
 
   let masterUpdated = false;
 
@@ -866,7 +1010,8 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   }
 
   // 2. ACCUMULATIVE Sync to Daily Archive for today (DO NOT OVERWRITE OR WIPE PREVIOUS PATIENTS OF TODAY)
-  const existingVisits = dailyArchive[today] || [];
+  // Hanya baca+tulis file arsip bulan berjalan, bukan seluruh riwayat.
+  const existingVisits = loadDailyArchiveForDate(today);
   const visitsMap = new Map<string, any>();
   const currentStateForBoxes = (!boxes || !Array.isArray(boxes)) ? loadStateFromFile() : null;
   const currentBoxes = (boxes && Array.isArray(boxes))
@@ -912,8 +1057,7 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
     });
   });
 
-  dailyArchive[today] = Array.from(visitsMap.values());
-  saveDailyArchive(dailyArchive);
+  saveDailyArchiveForDate(today, Array.from(visitsMap.values()));
 }
 
 // Debounced master patient & daily archive synchronization helper
@@ -1503,41 +1647,83 @@ async function mirrorStateToFirestore(state: any): Promise<void> {
 }
 
 // Mirror & Hydrate for Daily Archive (Laporan Harian & Bulanan per Terapis)
-let dailyArchiveMirrorDebounceTimer: NodeJS.Timeout | null = null;
-let pendingDailyArchiveMirror: Record<string, any[]> | null = null;
+// SATU DOKUMEN FIRESTORE PER BULAN (koleksi daily_archive_months, id = "YYYY-MM"),
+// bukan satu dokumen raksasa berisi semua tanggal - dokumen Firestore punya batas
+// keras 1MiB per dokumen, jadi format lama akan berhenti berfungsi total begitu
+// riwayat cukup panjang. Per-bulan juga jauh lebih hemat kuota tulis karena hanya
+// bulan yang berubah yang perlu di-upload ulang.
+const DAILY_ARCHIVE_MONTHS_COLLECTION = 'daily_archive_months';
+function dailyArchiveMonthDocRef(monthKey: string) {
+  return doc(serverFirestoreDb, DAILY_ARCHIVE_MONTHS_COLLECTION, monthKey);
+}
 
-async function mirrorDailyArchiveToFirestore(archive: Record<string, any[]>): Promise<void> {
+const dailyArchiveMirrorDebounceTimers = new Map<string, NodeJS.Timeout>();
+const pendingDailyArchiveMirrors = new Map<string, Record<string, any[]>>();
+
+async function mirrorArchiveMonthToFirestore(monthKey: string, data: Record<string, any[]>): Promise<void> {
   if (isFirestoreMirrorDisabled) return;
-  pendingDailyArchiveMirror = archive;
-  if (dailyArchiveMirrorDebounceTimer) clearTimeout(dailyArchiveMirrorDebounceTimer);
-  dailyArchiveMirrorDebounceTimer = setTimeout(async () => {
-    dailyArchiveMirrorDebounceTimer = null;
+  pendingDailyArchiveMirrors.set(monthKey, data);
+  const existingTimer = dailyArchiveMirrorDebounceTimers.get(monthKey);
+  if (existingTimer) clearTimeout(existingTimer);
+  const timer = setTimeout(async () => {
+    dailyArchiveMirrorDebounceTimers.delete(monthKey);
     if (isFirestoreMirrorDisabled) return;
-    const current = pendingDailyArchiveMirror;
+    const current = pendingDailyArchiveMirrors.get(monthKey);
+    pendingDailyArchiveMirrors.delete(monthKey);
     if (!current) return;
     try {
       const sanitized = JSON.parse(JSON.stringify(current));
-      await setDoc(DAILY_ARCHIVE_DOC_REF, { archive: sanitized, lastMirroredAt: new Date().toISOString() });
+      await setDoc(dailyArchiveMonthDocRef(monthKey), { archive: sanitized, lastMirroredAt: new Date().toISOString() });
     } catch (err: any) {
       handleFirestoreQuotaError(err, 'DailyArchiveMirror');
     }
   }, 5000);
+  dailyArchiveMirrorDebounceTimers.set(monthKey, timer);
 }
 
 async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
   try {
-    if (fs.existsSync(DAILY_ARCHIVE_FILE)) {
-      try {
-        const raw = JSON.parse(fs.readFileSync(DAILY_ARCHIVE_FILE, 'utf-8'));
-        if (raw && typeof raw === 'object' && Object.keys(raw).length > 0) return;
-      } catch {}
+    // Kalau disk lokal sudah punya isi (minimal 1 bulan dengan minimal 1 tanggal),
+    // anggap sudah terpulihkan - tidak perlu tarik dari cloud lagi.
+    const localMonthKeys = listArchiveMonthKeys();
+    const hasLocalData = localMonthKeys.some((mk) => Object.keys(loadArchiveMonth(mk)).length > 0);
+    if (hasLocalData) return;
+
+    let totalDates = 0;
+
+    // 1. Coba pulihkan dari koleksi per-bulan (format baru)
+    try {
+      const snapshot = await getDocs(collection(serverFirestoreDb, DAILY_ARCHIVE_MONTHS_COLLECTION));
+      snapshot.forEach((docSnap) => {
+        const archive = docSnap.data()?.archive;
+        if (archive && typeof archive === 'object' && Object.keys(archive).length > 0) {
+          saveArchiveMonthLocalOnly(docSnap.id, archive);
+          totalDates += Object.keys(archive).length;
+        }
+      });
+    } catch (err) {
+      console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive_months:', err);
     }
-    const snapshot = await getDoc(DAILY_ARCHIVE_DOC_REF);
-    if (!snapshot.exists()) return;
-    const cloudArchive = snapshot.data()?.archive;
-    if (cloudArchive && typeof cloudArchive === 'object' && Object.keys(cloudArchive).length > 0) {
-      console.log(`[FirestoreHydrate] Memulihkan ${Object.keys(cloudArchive).length} tanggal arsip dari Firestore.`);
-      safeAtomicWriteJson(DAILY_ARCHIVE_FILE, cloudArchive);
+
+    // 2. Fallback ke dokumen tunggal lama (kalau instance ini belum pernah jalan
+    // dengan format baru, tapi cloud masih punya backup dari format lama)
+    if (totalDates === 0) {
+      try {
+        const legacySnapshot = await getDoc(DAILY_ARCHIVE_DOC_REF);
+        if (legacySnapshot.exists()) {
+          const legacyArchive = legacySnapshot.data()?.archive;
+          if (legacyArchive && typeof legacyArchive === 'object' && Object.keys(legacyArchive).length > 0) {
+            saveFullDailyArchive(legacyArchive);
+            totalDates = Object.keys(legacyArchive).length;
+          }
+        }
+      } catch (err) {
+        console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive (format lama):', err);
+      }
+    }
+
+    if (totalDates > 0) {
+      console.log(`[FirestoreHydrate] Memulihkan ${totalDates} tanggal arsip dari Firestore.`);
     }
   } catch (err) {
     console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive:', err);
@@ -2403,7 +2589,7 @@ app.post('/api/ranap-history', (req, res) => {
 app.get('/api/backup/export', (req, res) => {
   try {
     const masterPatients = loadMasterPatients();
-    const dailyArchive = loadDailyArchive();
+    const dailyArchive = loadFullDailyArchive();
     const queueState = loadStateFromFile();
     const inventory = loadInventoryDb();
     const lainLain = loadLainLainDb();
@@ -2441,7 +2627,7 @@ app.post('/api/backup/restore', (req, res) => {
       saveMasterPatients(data.masterPatients);
     }
     if (data.dailyArchive && typeof data.dailyArchive === 'object') {
-      saveDailyArchive(data.dailyArchive);
+      saveFullDailyArchive(data.dailyArchive);
     }
     if (data.inventory && typeof data.inventory === 'object') {
       saveInventoryDb(data.inventory);
@@ -2506,16 +2692,17 @@ app.get('/api/daily-database', (req, res) => {
   try {
     const today = getLocalDateStringWIB();
     const targetDate = typeof req.query.date === 'string' && req.query.date.trim() ? req.query.date.trim() : today;
-    const dailyArchive = loadDailyArchive();
     const currentState = loadStateFromFile();
 
+    let visits = loadDailyArchiveForDate(targetDate);
+
     // If querying today and archive is empty, populate from current queue
-    if (targetDate === today && (!dailyArchive[today] || dailyArchive[today].length === 0) && currentState?.patients?.length > 0) {
+    if (targetDate === today && visits.length === 0 && currentState?.patients?.length > 0) {
       syncPatientsToMasterAndArchive(currentState.patients);
+      visits = loadDailyArchiveForDate(targetDate);
     }
 
-    const visits = dailyArchive[targetDate] || [];
-    const allDates = Object.keys(dailyArchive).sort().reverse();
+    const allDates = listAllArchiveDateKeys();
     if (!allDates.includes(today)) {
       allDates.unshift(today);
     }
@@ -2558,8 +2745,7 @@ app.post('/api/daily-database/visit', async (req, res) => {
     let updatedVisit: any;
 
     await enqueueQueueWrite(async () => {
-      const dailyArchive = loadDailyArchive();
-      const visits = dailyArchive[targetDate] || [];
+      const visits = loadDailyArchiveForDate(targetDate);
       const currentState = loadStateFromFile();
       const currentBoxes = (currentState && Array.isArray(currentState.boxes)) ? currentState.boxes : [];
 
@@ -2600,8 +2786,7 @@ app.post('/api/daily-database/visit', async (req, res) => {
         visits.push(updatedVisit);
       }
 
-      dailyArchive[targetDate] = visits;
-      saveDailyArchive(dailyArchive);
+      saveDailyArchiveForDate(targetDate, visits);
 
       // If target date is today, also sync safely with active queue
       if (targetDate === today) {
@@ -2640,8 +2825,7 @@ app.post('/api/daily-database/batch', async (req, res) => {
     }
 
     await enqueueQueueWrite(async () => {
-      const dailyArchive = loadDailyArchive();
-      const existing = dailyArchive[date] || [];
+      const existing = loadDailyArchiveForDate(date);
       const map = new Map<string, any>();
       existing.forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
       visits.forEach((v: any) => {
@@ -2650,8 +2834,7 @@ app.post('/api/daily-database/batch', async (req, res) => {
           map.set(v.id, { ...prev, ...v, visitDate: date });
         }
       });
-      dailyArchive[date] = Array.from(map.values());
-      saveDailyArchive(dailyArchive);
+      saveDailyArchiveForDate(date, Array.from(map.values()));
     });
 
     res.json({ status: 'ok', count: visits.length });
@@ -2670,12 +2853,13 @@ app.get('/api/monthly-report', (req, res) => {
     const targetMonth = req.query.month ? parseInt(req.query.month as string, 10) : now.getMonth() + 1;
     
     const monthPrefix = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
-    const dailyArchive = loadDailyArchive();
+    let dailyArchive = loadDailyArchiveForMonth(monthPrefix);
     const currentState = loadStateFromFile();
 
     // If active queue has patients for today and today matches this month, ensure synced
     if (today.startsWith(monthPrefix) && (!dailyArchive[today] || dailyArchive[today].length === 0) && currentState?.patients?.length > 0) {
       syncPatientsToMasterAndArchive(currentState.patients);
+      dailyArchive = loadDailyArchiveForMonth(monthPrefix);
     }
 
     // Collect all visits in this month
@@ -2750,7 +2934,7 @@ app.get('/api/analytics/visit-trends', (req, res) => {
     const yearPrefix = `${targetYear}-`;
 
     const today = getLocalDateStringWIB();
-    const dailyArchive = loadDailyArchive();
+    const dailyArchive = loadDailyArchiveForYear(targetYear);
     const currentState = loadStateFromFile();
 
     const visitsByDate: Record<string, any[]> = {};
@@ -3529,14 +3713,16 @@ async function flushPendingFirestoreMirrors(): Promise<void> {
       }).catch((err) => console.warn('[Shutdown] Gagal flush queue state mirror:', err)));
     }
   }
-  if (dailyArchiveMirrorDebounceTimer) {
-    clearTimeout(dailyArchiveMirrorDebounceTimer);
-    dailyArchiveMirrorDebounceTimer = null;
-    if (pendingDailyArchiveMirror && !isFirestoreMirrorDisabled) {
-      tasks.push(setDoc(DAILY_ARCHIVE_DOC_REF, {
-        archive: JSON.parse(JSON.stringify(pendingDailyArchiveMirror)),
+  for (const [monthKey, timer] of dailyArchiveMirrorDebounceTimers) {
+    clearTimeout(timer);
+    dailyArchiveMirrorDebounceTimers.delete(monthKey);
+    const pending = pendingDailyArchiveMirrors.get(monthKey);
+    pendingDailyArchiveMirrors.delete(monthKey);
+    if (pending && !isFirestoreMirrorDisabled) {
+      tasks.push(setDoc(dailyArchiveMonthDocRef(monthKey), {
+        archive: JSON.parse(JSON.stringify(pending)),
         lastMirroredAt: new Date().toISOString(),
-      }).catch((err) => console.warn('[Shutdown] Gagal flush daily archive mirror:', err)));
+      }).catch((err) => console.warn(`[Shutdown] Gagal flush daily archive mirror (${monthKey}):`, err)));
     }
   }
   if (masterPatientsMirrorDebounceTimer) {
@@ -3583,6 +3769,12 @@ process.on('SIGTERM', () => { void handleShutdownSignal('SIGTERM'); });
 process.on('SIGINT', () => { void handleShutdownSignal('SIGINT'); });
 
 async function startServer() {
+  // Migrasi satu kali dari daily_archive.json lama (satu file untuk semua tanggal)
+  // ke format baru per-bulan, kalau file lama itu masih ada. Harus jalan sebelum
+  // hydrateDailyArchiveFromFirestoreIfNeeded() di bawah, supaya data lokal yang
+  // sudah ada tidak dianggap kosong lalu malah ditimpa oleh hydrate dari cloud.
+  migrateLegacyDailyArchiveIfNeeded();
+
   // Pulihkan state dari Cloud Firestore dulu kalau disk lokal instance ini kosong/baru
   // (mis. instance backend di-recycle oleh platform hosting saat idle) sebelum mulai
   // melayani request, supaya device yang connect tidak melihat papan antrian kosong.
