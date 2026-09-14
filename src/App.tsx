@@ -648,6 +648,39 @@ export default function App() {
     }
   }, []);
 
+  // Self-healing: normalizeAndMergeBoxes/mergeBoxesByRecency kadang mengganti
+  // atau menggabungkan id kotak (mis. kotak duplikat dari perangkat lain yang
+  // id-nya berbeda tapi terapisnya sama, atau id lama yang belum ter-migrasi
+  // ke id kanonik). Saat itu terjadi, pasien yang boxId-nya masih menunjuk ke
+  // id kotak lama jadi tidak match dengan kotak manapun di state terbaru -
+  // kotaknya sendiri tetap tampil, tapi daftar pasien di dalamnya kosong.
+  // Perbaiki otomatis dengan mencocokkan ulang via nama terapis (officerName),
+  // bukan cuma boxId literal, setiap kali daftar kotak berubah.
+  useEffect(() => {
+    if (boxes.length === 0) return;
+    const boxIdSet = new Set(boxes.map(b => b.id));
+    const boxIdByCanonicalKey = new Map<string, string>();
+    boxes.forEach(b => {
+      const key = getCanonicalTherapistKey(b.officerName, b.location, b.id);
+      if (!boxIdByCanonicalKey.has(key)) boxIdByCanonicalKey.set(key, b.id);
+    });
+
+    setPatients(prev => {
+      let changed = false;
+      const next = prev.map(p => {
+        if (!p.boxId || boxIdSet.has(p.boxId) || !p.officerName) return p;
+        const key = getCanonicalTherapistKey(p.officerName, undefined, p.boxId);
+        const targetBoxId = boxIdByCanonicalKey.get(key);
+        if (targetBoxId && targetBoxId !== p.boxId) {
+          changed = true;
+          return { ...p, boxId: targetBoxId };
+        }
+        return p;
+      });
+      return changed ? next : prev;
+    });
+  }, [boxes]);
+
   // Multi-Device Real-Time Sync Subscription & Initial Server Fetch
   useEffect(() => {
     let isMounted = true;
