@@ -3,6 +3,7 @@ import { X, FileText, Download, FileSpreadsheet, Calendar, CheckCircle2, User, U
 import { QueueBox, PatientItem, DailyPatientVisit } from '../types';
 import { exportMonthlyTherapistPDF, exportMonthlyTherapistExcel, MonthlyReportData } from '../utils/export';
 import { cloudDatabaseService } from '../utils/cloudDatabaseService';
+import { getCanonicalTherapistKey } from '../utils/savedOfficersService';
 
 interface MonthlyReportModalProps {
   isOpen: boolean;
@@ -163,8 +164,13 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
     }));
 
   // Group patients by Therapist / Officer Name (utilizing frozen officerName & boxTitle first)
+  // Pengelompokan memakai getCanonicalTherapistKey (identitas terapis yang sama dipakai
+  // untuk anti-tabrakan kotak) supaya kunjungan lama yang tercatat dengan ejaan/gelar
+  // berbeda (mis. "Bambang Jinangkung SST.Ftr" vs "BAMBANG JINANGKUNG") tetap digabung
+  // jadi satu grup, bukan pecah jadi grup terpisah di laporan.
   interface TherapistGroup {
     therapistName: string;
+    canonicalKey: string;
     boxId: string;
     boxTitle: string;
     location: string;
@@ -176,14 +182,19 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
 
   const therapistMap = new Map<string, TherapistGroup>();
 
+  const findLiveBoxForKey = (key: string) =>
+    boxes.find(b => getCanonicalTherapistKey(b.officerName, b.location, b.id) === key);
+
   // For the current active month, pre-initialize active boxes so therapists on duty show up even with 0 visits
   const isCurrentMonth = selectedYear === now.getFullYear() && selectedMonth === (now.getMonth() + 1);
   if (isCurrentMonth) {
     boxes.forEach(box => {
       const name = (box.officerName || box.title || '').trim();
-      if (name && !therapistMap.has(name)) {
-        therapistMap.set(name, {
+      const canonicalKey = getCanonicalTherapistKey(box.officerName, box.location, box.id);
+      if (name && !therapistMap.has(canonicalKey)) {
+        therapistMap.set(canonicalKey, {
           therapistName: box.officerName || box.title,
+          canonicalKey,
           boxId: box.id,
           boxTitle: box.title,
           location: box.location,
@@ -207,14 +218,18 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
     const boxTitle = frozenBoxTitle || fallbackBox?.title || (frozenOfficer ? `Kotak ${frozenOfficer}` : 'Ruangan');
     const location = fallbackBox?.location || '-';
 
-    const key = therapistName;
+    const canonicalKey = getCanonicalTherapistKey(frozenOfficer, location, p.boxId);
 
-    if (!therapistMap.has(key)) {
-      therapistMap.set(key, {
-        therapistName,
-        boxId: p.boxId || (fallbackBox ? fallbackBox.id : 'unknown'),
-        boxTitle,
-        location,
+    if (!therapistMap.has(canonicalKey)) {
+      // Kalau terapis ini masih punya kotak aktif sekarang, pakai nama bersihnya sebagai
+      // nama tampilan supaya kunjungan lama & baru muncul di bawah nama yang sama.
+      const liveBox = findLiveBoxForKey(canonicalKey);
+      therapistMap.set(canonicalKey, {
+        therapistName: liveBox?.officerName?.trim() || therapistName,
+        canonicalKey,
+        boxId: p.boxId || liveBox?.id || (fallbackBox ? fallbackBox.id : 'unknown'),
+        boxTitle: liveBox?.title?.trim() || boxTitle,
+        location: liveBox?.location || location,
         patients: [],
         actionCounts: {},
         ranapCount: 0,
@@ -222,7 +237,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
       });
     }
 
-    const group = therapistMap.get(key)!;
+    const group = therapistMap.get(canonicalKey)!;
     group.patients.push(p);
 
     if (p.isRanap) {
@@ -240,7 +255,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
 
   // Filter by selected therapist
   if (selectedTherapist !== 'all') {
-    therapistGroups = therapistGroups.filter(g => g.therapistName === selectedTherapist || g.boxId === selectedTherapist);
+    therapistGroups = therapistGroups.filter(g => g.canonicalKey === selectedTherapist || g.boxId === selectedTherapist);
   }
 
   // Filter inside patient lists if search query is active
@@ -395,7 +410,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
               >
                 <option value="all">Semua Terapis / Petugas</option>
                 {Array.from(therapistMap.values()).map((t) => (
-                  <option key={t.therapistName} value={t.therapistName}>
+                  <option key={t.canonicalKey} value={t.canonicalKey}>
                     {t.therapistName} ({t.patients.length} pasien)
                   </option>
                 ))}
@@ -638,7 +653,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
               </div>
             ) : (
               therapistGroups.map((group) => (
-                <div key={group.therapistName} className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                <div key={group.canonicalKey} className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
                   {/* Therapist Group Header */}
                   <div className="bg-slate-900 text-white p-3.5 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-3">
@@ -648,7 +663,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
                       <div>
                         <h5 className="font-black text-sm text-white flex items-center gap-2">
                           <button
-                            onClick={() => { setDrilldownTherapist(group.therapistName); setExpandedDates(new Set()); }}
+                            onClick={() => { setDrilldownTherapist(group.canonicalKey); setExpandedDates(new Set()); }}
                             className="hover:underline decoration-2 underline-offset-2 cursor-pointer text-left"
                             title={`Lihat tabel harian ${group.therapistName}`}
                           >
