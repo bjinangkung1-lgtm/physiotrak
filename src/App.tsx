@@ -687,10 +687,21 @@ export default function App() {
       }
 
       // Handle Explicit Reset across all devices
+      // PENTING: JANGAN pernah anggap array pasien kosong sebagai tanda reset,
+      // walau disertai `lastResetAt` - itu cuma watermark PERMANEN dari reset
+      // TERAKHIR KALI terjadi (bisa dari kemarin/tadi pagi), bukan penanda
+      // "reset sedang terjadi sekarang". Kalau sewaktu-waktu array pasien
+      // kebetulan kosong lagi di siang/sore hari (glitch jaringan, race saat
+      // ada perangkat baru connect, dll), kombinasi ini akan salah memicu
+      // pembersihan total (pasien+callLogs+notifikasi) padahal tidak ada yang
+      // menekan reset. `isExplicitReset`/`resetConfirmed` sendiri aman dipakai
+      // sendirian karena keduanya SELALU di-set eksplisit `false` di setiap
+      // broadcast normal (lihat useEffect broadcast utama) - hanya bernilai
+      // true pada broadcast reset itu sendiri, konsisten dengan isCloudExplicitReset
+      // & isServerReset di 2 titik sinkronisasi lain.
       const isResetEvent = Boolean(
         syncData.isExplicitReset ||
-        syncData.resetConfirmed ||
-        (Array.isArray(syncData.patients) && syncData.patients.length === 0 && (syncData.lastResetAt || syncData.isExplicitReset))
+        syncData.resetConfirmed
       );
 
       if (syncData.lastResetAt) {
@@ -735,11 +746,21 @@ export default function App() {
       }
 
       if (syncData.patients && Array.isArray(syncData.patients)) {
-        if (syncData.patients.length === 0) {
-          knownPatientIdsRef.current.clear();
-          setPatients([]);
-          localStorage.removeItem('antrian_patients');
-        } else {
+        // PENTING: array pasien yang masuk kosong TIDAK BOLEH langsung dianggap
+        // "server bilang tidak ada pasien aktif, jadi hapus semua punya saya".
+        // Setiap broadcast selalu membawa SELURUH state pasien milik pengirimnya
+        // saat itu - kalau pengirim (perangkat lain) kebetulan sedang di kondisi
+        // 0 pasien aktif (baru selesai reset, atau baru mulai hydrate), lalu
+        // memicu broadcast apa pun (ganti warna kotak, dsb), perangkat LAIN yang
+        // menerima update ini akan ikut menghapus seluruh antreannya sendiri -
+        // padahal tidak ada yang benar-benar direset - persis gejala "daftar
+        // pasien hilang lalu timbul lagi" saat aplikasi sedang dipakai banyak
+        // perangkat. reconcileClientPatients sudah aman untuk kasus ini: kalau
+        // incomingPatients kosong & isExplicitReset=false, ia hanya
+        // mempertahankan pasien yang sudah ada secara lokal (tidak menghapus
+        // apa pun) - jadi SELALU pakai jalur ini, jangan pernah setPatients([])
+        // di luar cabang isResetEvent yang eksplisit di atas.
+        if (syncData.patients.length > 0) {
           // Detect newly arrived active patients from other devices
           if (knownPatientIdsRef.current.size > 0) {
             const newRemotePatients = syncData.patients.filter(
@@ -769,22 +790,23 @@ export default function App() {
               setUnreadCount(prev => prev + newRemotePatients.length);
             }
           }
-          if (Array.isArray(syncData.deletedPatientIds) && syncData.deletedPatientIds.length > 0) {
-            syncData.deletedPatientIds.forEach((id: string) => addLocalTombstone(id));
-          }
           syncData.patients.forEach(p => knownPatientIdsRef.current.add(p.id));
-
-          setPatients(prev => {
-            const merged = reconcileClientPatients(
-              prev,
-              syncData.patients,
-              false,
-              syncData.deletedPatientIds,
-              syncData.lastResetAt
-            );
-            return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
-          });
         }
+
+        if (Array.isArray(syncData.deletedPatientIds) && syncData.deletedPatientIds.length > 0) {
+          syncData.deletedPatientIds.forEach((id: string) => addLocalTombstone(id));
+        }
+
+        setPatients(prev => {
+          const merged = reconcileClientPatients(
+            prev,
+            syncData.patients,
+            false,
+            syncData.deletedPatientIds,
+            syncData.lastResetAt
+          );
+          return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
+        });
       }
 
       if (syncData.callLogs && Array.isArray(syncData.callLogs)) {
