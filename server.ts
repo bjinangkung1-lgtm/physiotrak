@@ -2816,6 +2816,30 @@ app.post('/api/daily-database/visit', async (req, res) => {
   }
 });
 
+// POST /api/loadtest/purge (SEMENTARA - dipakai Panel Tes Beban untuk membersihkan
+// data uji dari arsip harian hari ini berdasarkan awalan id. Aman: hanya menghapus
+// entri arsip HARI INI yang id-nya diawali idPrefix, tidak menyentuh tanggal/data lain.)
+app.post('/api/loadtest/purge', async (req, res) => {
+  try {
+    const { idPrefix } = req.body;
+    if (!idPrefix || typeof idPrefix !== 'string') {
+      return res.status(400).json({ error: 'idPrefix wajib diisi' });
+    }
+    const today = getLocalDateStringWIB();
+    let removed = 0;
+    await enqueueQueueWrite(async () => {
+      const visits = loadDailyArchiveForDate(today);
+      const filtered = visits.filter((v: any) => !String(v?.id || '').startsWith(idPrefix));
+      removed = visits.length - filtered.length;
+      saveDailyArchiveForDate(today, filtered);
+    });
+    res.json({ status: 'ok', removed });
+  } catch (error: any) {
+    console.error('Error purging loadtest data:', error);
+    res.status(500).json({ error: error?.message || 'Gagal membersihkan data tes' });
+  }
+});
+
 // POST /api/daily-database/batch (Batch restore/heal archives for a date from Cloud Firestore)
 app.post('/api/daily-database/batch', async (req, res) => {
   try {
