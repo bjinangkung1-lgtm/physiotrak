@@ -1581,12 +1581,20 @@ function saveStateToFile(state: any) {
 // tanpa mengganggu request yang sedang berjalan; disk lokal tetap sumber utama
 // untuk instance yang sama).
 const FIRESTORE_QUOTA_FLAG_FILE = path.join(DATA_DIR, '.firestore_quota_disabled');
+// Jeda "menyerah" saat kuota Firestore habis. Sebelumnya 1 jam penuh - terlalu
+// lama: kalau kuotanya ternyata sudah pulih (reset harian, atau cuma lonjakan
+// sesaat), sistem tetap buta tidak mencadangkan APA PUN ke cloud sampai 1 jam
+// penuh berlalu. Dipersingkat jadi beberapa menit saja - kalau ternyata masih
+// benar-benar habis, percobaan ulang yang gagal itu aman (permintaan yang
+// DITOLAK Firestore karena kuota tidak menghabiskan kuota tambahan yang
+// berarti), jadi tidak ada kerugian mempersingkat jeda ini.
+const FIRESTORE_QUOTA_COOLDOWN_MS = 5 * 60 * 1000; // 5 menit
 let isFirestoreMirrorDisabled = (() => {
   try {
     if (fs.existsSync(FIRESTORE_QUOTA_FLAG_FILE)) {
       const content = fs.readFileSync(FIRESTORE_QUOTA_FLAG_FILE, 'utf-8');
       const flagTs = parseInt(content, 10);
-      if (flagTs && Date.now() - flagTs < 3600000) {
+      if (flagTs && Date.now() - flagTs < FIRESTORE_QUOTA_COOLDOWN_MS) {
         return true;
       }
       try { fs.unlinkSync(FIRESTORE_QUOTA_FLAG_FILE); } catch {}
@@ -1596,6 +1604,26 @@ let isFirestoreMirrorDisabled = (() => {
 })();
 let mirrorDebounceTimer: NodeJS.Timeout | null = null;
 let pendingMirrorState: any = null;
+
+// Timer untuk menyalakan kembali mirroring secara OTOMATIS setelah jeda di
+// atas berlalu, WALAU server tidak pernah di-restart sama sekali. Sebelumnya,
+// begitu kuota habis, server yang sedang berjalan tidak akan pernah mencoba
+// lagi sendiri - baru dicek ulang kalau prosesnya restart (dan restart-nya
+// sendiri baru terjadi kalau server idle lama). Sekarang server yang sama
+// bisa pulih sendiri begitu jedanya lewat, tanpa perlu menunggu restart.
+let firestoreQuotaRetryTimer: NodeJS.Timeout | null = null;
+
+function scheduleFirestoreQuotaRetry() {
+  if (firestoreQuotaRetryTimer) {
+    clearTimeout(firestoreQuotaRetryTimer);
+  }
+  firestoreQuotaRetryTimer = setTimeout(() => {
+    firestoreQuotaRetryTimer = null;
+    isFirestoreMirrorDisabled = false;
+    try { fs.unlinkSync(FIRESTORE_QUOTA_FLAG_FILE); } catch {}
+    console.log('[FirestoreMirror] Jeda kuota selesai, mencoba mencadangkan ke Cloud Firestore lagi secara otomatis.');
+  }, FIRESTORE_QUOTA_COOLDOWN_MS);
+}
 
 function handleFirestoreQuotaError(err: any, label: string): boolean {
   const errMsg = err?.message || String(err);
@@ -1607,7 +1635,8 @@ function handleFirestoreQuotaError(err: any, label: string): boolean {
   if (isQuotaError) {
     isFirestoreMirrorDisabled = true;
     try { fs.writeFileSync(FIRESTORE_QUOTA_FLAG_FILE, Date.now().toString(), 'utf-8'); } catch {}
-    console.warn(`[${label}] Kuota Firestore habis, mirroring dinonaktifkan sementara.`);
+    console.warn(`[${label}] Kuota Firestore habis, mirroring dinonaktifkan sementara (akan dicoba lagi otomatis dalam ${Math.round(FIRESTORE_QUOTA_COOLDOWN_MS / 60000)} menit).`);
+    scheduleFirestoreQuotaRetry();
   } else {
     console.warn(`[${label}] Gagal mencadangkan ke Cloud Firestore:`, err);
   }
