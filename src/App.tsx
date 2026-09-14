@@ -720,18 +720,6 @@ export default function App() {
       }
 
       // Handle Explicit Reset across all devices
-      // PENTING: JANGAN pernah anggap array pasien kosong sebagai tanda reset,
-      // walau disertai `lastResetAt` - itu cuma watermark PERMANEN dari reset
-      // TERAKHIR KALI terjadi (bisa dari kemarin/tadi pagi), bukan penanda
-      // "reset sedang terjadi sekarang". Kalau sewaktu-waktu array pasien
-      // kebetulan kosong lagi di siang/sore hari (glitch jaringan, race saat
-      // ada perangkat baru connect, dll), kombinasi ini akan salah memicu
-      // pembersihan total (pasien+callLogs+notifikasi) padahal tidak ada yang
-      // menekan reset. `isExplicitReset`/`resetConfirmed` sendiri aman dipakai
-      // sendirian karena keduanya SELALU di-set eksplisit `false` di setiap
-      // broadcast normal (lihat useEffect broadcast utama) - hanya bernilai
-      // true pada broadcast reset itu sendiri, konsisten dengan isCloudExplicitReset
-      // & isServerReset di 2 titik sinkronisasi lain.
       const isResetEvent = Boolean(
         syncData.isExplicitReset ||
         syncData.resetConfirmed
@@ -779,20 +767,6 @@ export default function App() {
       }
 
       if (syncData.patients && Array.isArray(syncData.patients)) {
-        // PENTING: array pasien yang masuk kosong TIDAK BOLEH langsung dianggap
-        // "server bilang tidak ada pasien aktif, jadi hapus semua punya saya".
-        // Setiap broadcast selalu membawa SELURUH state pasien milik pengirimnya
-        // saat itu - kalau pengirim (perangkat lain) kebetulan sedang di kondisi
-        // 0 pasien aktif (baru selesai reset, atau baru mulai hydrate), lalu
-        // memicu broadcast apa pun (ganti warna kotak, dsb), perangkat LAIN yang
-        // menerima update ini akan ikut menghapus seluruh antreannya sendiri -
-        // padahal tidak ada yang benar-benar direset - persis gejala "daftar
-        // pasien hilang lalu timbul lagi" saat aplikasi sedang dipakai banyak
-        // perangkat. reconcileClientPatients sudah aman untuk kasus ini: kalau
-        // incomingPatients kosong & isExplicitReset=false, ia hanya
-        // mempertahankan pasien yang sudah ada secara lokal (tidak menghapus
-        // apa pun) - jadi SELALU pakai jalur ini, jangan pernah setPatients([])
-        // di luar cabang isResetEvent yang eksplisit di atas.
         if (syncData.patients.length > 0) {
           // Detect newly arrived active patients from other devices
           if (knownPatientIdsRef.current.size > 0) {
@@ -920,9 +894,20 @@ export default function App() {
         });
       }
 
+      // PENTING: sama seperti di jalur sinkronisasi lain (SSE/BroadcastChannel &
+      // REST fetch awal) - JANGAN anggap `lastResetAt` (watermark PERMANEN dari
+      // reset TERAKHIR KALI, bisa dari kemarin) sebagai sinyal reset, dan JANGAN
+      // anggap validCloudPatients kosong sebagai tanda reset. Snapshot Firestore
+      // yang sedang di-hydrate saat cold-start/reload bisa kebetulan tertinggal
+      // (belum ter-mirror pasien aktif terbaru dari perangkat lain) sehingga
+      // tampak "0 pasien" padahal antrean sebenarnya tidak kosong - kalau ini
+      // dianggap reset, `setPatients([])` di bawah akan menghapus pasien yang
+      // BARU SAJA benar dipulihkan lewat fetch REST /api/queue (race kondisi
+      // antara 2 sumber hydrasi awal). isExplicitReset/resetConfirmed sendiri
+      // aman dipakai sendirian karena keduanya SELALU di-set eksplisit oleh
+      // cloudDatabaseService.saveQueueState (lihat cloudDatabaseService.ts).
       const isCloudExplicitReset = Boolean(
-        (cloudState.isExplicitReset || cloudState.resetConfirmed || cloudState.lastResetAt) &&
-        validCloudPatients.length === 0
+        cloudState.isExplicitReset || cloudState.resetConfirmed
       );
 
       if (isCloudExplicitReset) {

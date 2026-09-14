@@ -90,16 +90,6 @@ export function calculatePatientTimeMetrics(
 ): PatientTimeMetrics {
   const registeredAt = new Date(patient.createdAt);
   const regTime = registeredAt.getTime();
-  // clampToServiceStart=true (dipakai untuk statistik SPM/analitik agregat):
-  // jam mulai dihitung paling awal dari 08:00 WIB, supaya staf yang input
-  // pasien sebelum jam buka tidak "dihukum" waktu respon jadi lebih lama.
-  // clampToServiceStart=false (dipakai untuk badge "waktu tunggu" LIVE di
-  // kartu kotak antrean): TIDAK di-clamp, supaya badge selalu menunjukkan
-  // durasi tunggu SEBENARNYA sejak pasien didaftarkan dan terus berjalan -
-  // kalau tetap di-clamp, badge akan terlihat "macet" di 0/"< 1 mnt" selama
-  // waktu sekarang masih sebelum jam 08:00 (mis. staf input pasien jam
-  // 05:30, di-clamp ke 08:00 yang notabene MASIH DI MASA DEPAN, jadi selisih
-  // waktu-sekarang-dikurangi-jam-mulai selalu negatif/dibatasi ke 0).
   const effectiveStartTime = !isNaN(regTime)
     ? (clampToServiceStart
       ? Math.max(regTime, getServiceStartTimestampWIB(registeredAt, SERVICE_START_HOUR_WIB))
