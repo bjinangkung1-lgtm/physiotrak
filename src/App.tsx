@@ -441,6 +441,7 @@ export default function App() {
   const [isMonthlyReportOpen, setIsMonthlyReportOpen] = useState(false);
   const [isTVDisplayOpen, setIsTVDisplayOpen] = useState(false);
   const [isCloudBackupDegraded, setIsCloudBackupDegraded] = useState(false);
+  const [showBackupDegradedInfo, setShowBackupDegradedInfo] = useState(false);
   const [isResponseTimeModalOpen, setIsResponseTimeModalOpen] = useState(false);
   const [isLainLainOpen, setIsLainLainOpen] = useState(false);
   const [lainLainInitialTab, setLainLainInitialTab] = useState<'kas' | 'rotasi' | 'sabtu' | 'cuti'>('kas');
@@ -2320,11 +2321,24 @@ export default function App() {
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl pointer-events-none -z-10" />
       <div className="fixed bottom-10 right-1/4 w-96 h-96 bg-cyan-200/20 rounded-full blur-3xl pointer-events-none -z-10" />
 
-      {/* Peringatan cadangan cloud bermasalah - sengaja dibuat mencolok & tidak
-          bisa ditutup, supaya tidak terlewat, dan otomatis hilang begitu pulih. */}
+      {/* Indikator kecil kalau cadangan cloud sedang bermasalah - sengaja dibuat
+          diskret (titik kuning berkedip, tanpa teks) supaya tidak bikin heboh
+          staf umum; detailnya cuma muncul kalau diketuk. Otomatis hilang begitu
+          statusnya pulih (polling tiap 30 detik). */}
       {isCloudBackupDegraded && (
-        <div className="fixed top-0 left-0 right-0 z-[9999] bg-amber-500 text-slate-900 text-xs sm:text-sm font-black text-center py-2 px-4 shadow-lg">
-          ⚠️ Cadangan otomatis ke Cloud sedang bermasalah (kemungkinan kuota harian habis). Data di server ini tetap aman, TAPI JANGAN matikan semua perangkat/tablet sampai ini pulih sendiri (beberapa menit). Hubungi admin kalau peringatan ini masih muncul lebih dari 15 menit.
+        <div className="fixed top-2.5 right-2.5 z-[9999]">
+          <button
+            type="button"
+            onClick={() => setShowBackupDegradedInfo(prev => !prev)}
+            className="w-3.5 h-3.5 rounded-full bg-amber-400 shadow-lg ring-2 ring-amber-300/60 animate-pulse cursor-pointer"
+            title="Status sistem"
+          />
+          {showBackupDegradedInfo && (
+            <div className="absolute top-6 right-0 w-60 bg-slate-900 text-white text-[11px] rounded-xl p-3 shadow-2xl border border-slate-700 leading-relaxed">
+              <p className="font-bold mb-1">🔄 Sinkronisasi cadangan tersendat</p>
+              <p className="text-slate-300">Data tetap aman tersimpan. Sistem sedang mencoba menyambung lagi otomatis. Usahakan minimal 1 perangkat tetap terbuka sampai ini hilang sendiri.</p>
+            </div>
+          )}
         </div>
       )}
 
