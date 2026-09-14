@@ -440,6 +440,7 @@ export default function App() {
   const [historyBox, setHistoryBox] = useState<QueueBox | null>(null);
   const [isMonthlyReportOpen, setIsMonthlyReportOpen] = useState(false);
   const [isTVDisplayOpen, setIsTVDisplayOpen] = useState(false);
+  const [isCloudBackupDegraded, setIsCloudBackupDegraded] = useState(false);
   const [isResponseTimeModalOpen, setIsResponseTimeModalOpen] = useState(false);
   const [isLainLainOpen, setIsLainLainOpen] = useState(false);
   const [lainLainInitialTab, setLainLainInitialTab] = useState<'kas' | 'rotasi' | 'sabtu' | 'cuti'>('kas');
@@ -648,6 +649,28 @@ export default function App() {
         setIsTVDisplayOpen(true);
       }
     }
+  }, []);
+
+  // Pantau status kesehatan cadangan cloud (Firestore) secara berkala. Kalau
+  // cadangan otomatis sedang dinonaktifkan (mis. kuota harian habis), tampilkan
+  // peringatan yang TERLIHAT ke staf saat itu juga - supaya tidak ada lagi
+  // kejadian "data hilang tanpa peringatan" yang baru ketahuan keesokan harinya.
+  useEffect(() => {
+    let isMounted = true;
+    const checkBackupStatus = () => {
+      fetch('/api/system/status')
+        .then(res => res.json())
+        .then(data => {
+          if (isMounted) setIsCloudBackupDegraded(Boolean(data?.firestoreMirrorDisabled));
+        })
+        .catch(() => {});
+    };
+    checkBackupStatus();
+    const interval = setInterval(checkBackupStatus, 30000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   // Self-healing: normalizeAndMergeBoxes/mergeBoxesByRecency kadang mengganti
@@ -2296,6 +2319,14 @@ export default function App() {
       {/* Subtle modern ambient background glow for high-tech aesthetic */}
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl pointer-events-none -z-10" />
       <div className="fixed bottom-10 right-1/4 w-96 h-96 bg-cyan-200/20 rounded-full blur-3xl pointer-events-none -z-10" />
+
+      {/* Peringatan cadangan cloud bermasalah - sengaja dibuat mencolok & tidak
+          bisa ditutup, supaya tidak terlewat, dan otomatis hilang begitu pulih. */}
+      {isCloudBackupDegraded && (
+        <div className="fixed top-0 left-0 right-0 z-[9999] bg-amber-500 text-slate-900 text-xs sm:text-sm font-black text-center py-2 px-4 shadow-lg">
+          ⚠️ Cadangan otomatis ke Cloud sedang bermasalah (kemungkinan kuota harian habis). Data di server ini tetap aman, TAPI JANGAN matikan semua perangkat/tablet sampai ini pulih sendiri (beberapa menit). Hubungi admin kalau peringatan ini masih muncul lebih dari 15 menit.
+        </div>
+      )}
 
       {/* Therapist Sidebar */}
       <TherapistSidebar

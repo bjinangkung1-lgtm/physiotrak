@@ -2285,6 +2285,13 @@ app.get('/api/queue', (req, res) => {
   res.json({ status: 'ok', state });
 });
 
+// GET status kesehatan sistem (dipakai klien untuk menampilkan peringatan kalau
+// cadangan otomatis ke Cloud Firestore sedang bermasalah/dinonaktifkan - supaya
+// staf tahu SAAT ITU JUGA, bukan menemukan datanya hilang keesokan harinya).
+app.get('/api/system/status', (req, res) => {
+  res.json({ status: 'ok', firestoreMirrorDisabled: isFirestoreMirrorDisabled });
+});
+
 // POST update full queue state and notify all connected devices instantly
 app.post('/api/queue', async (req, res) => {
   try {
