@@ -46,11 +46,26 @@ export const getTherapistCategory = (officerName: string, location?: string, exp
 export const getCanonicalTherapistKey = (officerName: string = '', location: string = '', id: string = ''): string => {
   const nameLower = (officerName || '').toLowerCase();
   const idLower = (id || '').toLowerCase();
-  const full = `${nameLower} ${idLower}`;
 
-  // Peralihan Siang
-  if (full.includes('peralihan')) return 'box-peralihan-siang';
-  if (full.includes('jemputan')) return 'box-jemputan';
+  // Kotak Jemputan & Peralihan Siang: officerName-nya sering generik (mis. "Tim
+  // Transport IRM RSPP"), jadi id tetap dicek sebagai fallback KHUSUS untuk 2
+  // kotak spesial ini saja - bukan berarti id boleh ikut menentukan identitas
+  // terapis bernama di bawah.
+  if (nameLower.includes('peralihan') || idLower.includes('peralihan')) return 'box-peralihan-siang';
+  if (nameLower.includes('jemputan') || idLower.includes('jemputan')) return 'box-jemputan';
+
+  // PENTING: mulai sini, kode pengenal SETIAP terapis HANYA dihitung dari
+  // officerName - TIDAK LAGI ikut mencampur `id` kotak ke dalam pencocokan.
+  // Dulu `full` menggabungkan nama+id, dan karena id kotak sekarang permanen
+  // (tidak lagi otomatis berubah ikut nama - lihat normalizeAndMergeBoxes),
+  // sebuah kotak yang di-rename (mis. id "box-bambang" namanya diganti jadi
+  // "Reva") tetap mengandung kata "bambang" lewat id-nya sendiri, jadi kalau
+  // id ikut dicek, kode pengenalnya "nyangkut" ke pemilik LAMA (ft-bambang)
+  // alih-alih pemilik BARU sesuai nama yang benar-benar berlaku sekarang
+  // (ft-reva) - membuat pengecekan tabrakan nama (di handleUpdateBox/
+  // handleAddBox) dan dedup kotak duplikat gagal mendeteksi kembar yang
+  // sebenarnya. Nama yang menentukan, bukan id.
+  const full = nameLower;
 
   // Okupasi
   if (full.includes('cecep')) return 'ot-cecep';
@@ -83,7 +98,9 @@ export const getCanonicalTherapistKey = (officerName: string = '', location: str
   if (full.includes('tri handayani')) return 'ft-tri';
   if (full.includes('bustomi')) return 'ft-bustomi';
 
-  // Default fallback: cleaned name without degrees
+  // Default fallback: cleaned name without degrees. `id` hanya dipakai kalau
+  // nama benar-benar kosong (mis. kotak baru belum diisi) - bukan lagi
+  // dicampur ke pencocokan nama di atas.
   const clean = nameLower.replace(/(sst\.ftr|sst\.ft|sstft|sst ft|amd\.ft|amd ft|amd\.kep|s\.kep|s\.ft|s\.ft|ftr|a\.md\.tw|a\.md\.ot|s\.tr\.tw|s\.tr\.ot|dr\.|drg\.)/gi, '').trim();
   return clean || idLower || nameLower;
 };
