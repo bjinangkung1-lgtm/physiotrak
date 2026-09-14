@@ -25,7 +25,6 @@ import { InventoryStockModal } from './components/InventoryStockModal';
 import { ResetConfirmPinModal } from './components/ResetConfirmPinModal';
 import { SopModal } from './components/SopModal';
 import { TherapistSidebar } from './components/TherapistSidebar';
-import LoadTestPanel from './components/LoadTestPanel';
 import { TherapistMobileBar } from './components/TherapistMobileBar';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { MobileMoreModal } from './components/MobileMoreModal';
@@ -2297,9 +2296,6 @@ export default function App() {
       {/* Subtle modern ambient background glow for high-tech aesthetic */}
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl pointer-events-none -z-10" />
       <div className="fixed bottom-10 right-1/4 w-96 h-96 bg-cyan-200/20 rounded-full blur-3xl pointer-events-none -z-10" />
-
-      {/* Panel Tes Beban (sementara) - hanya aktif dengan ?loadtest=IRM2026 di URL */}
-      <LoadTestPanel />
 
       {/* Therapist Sidebar */}
       <TherapistSidebar
