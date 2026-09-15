@@ -451,6 +451,29 @@ export default function App() {
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(true);
   const knownPatientIdsRef = React.useRef<Set<string>>(new Set());
+  const [boxColumnCount, setBoxColumnCount] = useState(() => {
+    if (typeof window === 'undefined') return 1;
+    const w = window.innerWidth;
+    if (w >= 1536) return 5;
+    if (w >= 1280) return 4;
+    if (w >= 1024) return 3;
+    if (w >= 768) return 2;
+    return 1;
+  });
+  useEffect(() => {
+    const computeColumnCount = () => {
+      const w = window.innerWidth;
+      if (w >= 1536) return 5;
+      if (w >= 1280) return 4;
+      if (w >= 1024) return 3;
+      if (w >= 768) return 2;
+      return 1;
+    };
+    const handleResize = () => setBoxColumnCount(computeColumnCount());
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Watermark ref for explicit box reordering (prevents stale devices from reverting box order)
   const boxOrderUpdatedAtRef = React.useRef<string | null>(
@@ -2239,6 +2262,14 @@ export default function App() {
 
   const visiblePinnedBoxes = pinnedBoxes.filter(isBoxVisibleInSearch);
   const visibleOtherBoxes = otherBoxes.filter(isBoxVisibleInSearch);
+
+  const distributeIntoColumns = (items: QueueBox[], columnCount: number): QueueBox[][] => {
+    const columns: QueueBox[][] = Array.from({ length: columnCount }, () => []);
+    items.forEach((item, index) => {
+      columns[index % columnCount].push(item);
+    });
+    return columns;
+  };
   const hasAnyVisibleBox = visiblePinnedBoxes.length > 0 || visibleOtherBoxes.length > 0;
   const totalMatchingPatients = patients.filter(p => {
     const parentBox = boxes.find(b => b.id === p.boxId);
@@ -2526,56 +2557,59 @@ export default function App() {
                   <span>Di-Sematkan (Pinned Counters) ({visiblePinnedBoxes.length})</span>
                 </div>
 
-                <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-5">
-                  {visiblePinnedBoxes.map((box) => {
-                    const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
-                    return (
-                      <div key={box.id} className="break-inside-avoid mb-5">
-                      <QueueBoxCard
-                        box={box}
-                        patients={boxPatients}
-                        allBoxes={boxes}
-                        isDragDisabled={!!searchQuery.trim() || !!selectedTherapistBoxId || statusFilter !== 'all'}
-                        isDragging={draggedBoxId === box.id}
-                        isDropTarget={dragOverBoxId === box.id && draggedBoxId !== box.id}
-                        onDragStartBox={handleDragStartBox}
-                        onDragEndBox={handleDragEndBox}
-                        onDragOverBox={handleDragOverBox}
-                        onDropBox={handleDropBox}
-                        onMoveBoxStep={handleMoveBoxStep}
-                        onTogglePin={handleTogglePin}
-                        onToggleCompletePatient={handleToggleCompletePatient}
-                        onCallPatient={handleCallPatient}
-                        onCallNextInBox={handleCallNextInBox}
-                        onClearUnread={handleClearBoxUnread}
-                        onAddPatientToBox={(bId) => {
-                          setAddPatientBoxId(bId);
-                          setIsAddPatientOpen(true);
-                        }}
-                        onViewHistory={(b) => {
-                          setHistoryBox(b);
-                          setIsHistoryOpen(true);
-                        }}
-                        onUpdateBoxColor={handleUpdateBoxColor}
-                        onUpdateBoxImage={handleUpdateBoxImage}
-                        onUpdateBoxImages={handleUpdateBoxImages}
-                        onDeleteBox={handleDeleteBox}
-                        onClearBoxPatients={handleClearBoxPatients}
-                        onDeletePatient={handleDeletePatient}
-                        onUpdatePatient={handleUpdatePatient}
-                        onEditBox={(b) => setEditingBox(b)}
-                        onOpenPatientQR={(p, b) => {
-                          setQrModalPatient(p);
-                          setQrModalBox(b);
-                          setIsQRModalOpen(true);
-                        }}
-                        onAddPatient={handleAddPatient}
-                        onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
-                        onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
-                      />
-                      </div>
-                    );
-                  })}
+                <div className="flex items-start gap-5">
+                  {distributeIntoColumns(visiblePinnedBoxes, boxColumnCount).map((column, columnIndex) => (
+                    <div key={columnIndex} className="flex-1 min-w-0 flex flex-col gap-5">
+                      {column.map((box) => {
+                        const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
+                        return (
+                          <QueueBoxCard
+                            key={box.id}
+                            box={box}
+                            patients={boxPatients}
+                            allBoxes={boxes}
+                            isDragDisabled={!!searchQuery.trim() || !!selectedTherapistBoxId || statusFilter !== 'all'}
+                            isDragging={draggedBoxId === box.id}
+                            isDropTarget={dragOverBoxId === box.id && draggedBoxId !== box.id}
+                            onDragStartBox={handleDragStartBox}
+                            onDragEndBox={handleDragEndBox}
+                            onDragOverBox={handleDragOverBox}
+                            onDropBox={handleDropBox}
+                            onMoveBoxStep={handleMoveBoxStep}
+                            onTogglePin={handleTogglePin}
+                            onToggleCompletePatient={handleToggleCompletePatient}
+                            onCallPatient={handleCallPatient}
+                            onCallNextInBox={handleCallNextInBox}
+                            onClearUnread={handleClearBoxUnread}
+                            onAddPatientToBox={(bId) => {
+                              setAddPatientBoxId(bId);
+                              setIsAddPatientOpen(true);
+                            }}
+                            onViewHistory={(b) => {
+                              setHistoryBox(b);
+                              setIsHistoryOpen(true);
+                            }}
+                            onUpdateBoxColor={handleUpdateBoxColor}
+                            onUpdateBoxImage={handleUpdateBoxImage}
+                            onUpdateBoxImages={handleUpdateBoxImages}
+                            onDeleteBox={handleDeleteBox}
+                            onClearBoxPatients={handleClearBoxPatients}
+                            onDeletePatient={handleDeletePatient}
+                            onUpdatePatient={handleUpdatePatient}
+                            onEditBox={(b) => setEditingBox(b)}
+                            onOpenPatientQR={(p, b) => {
+                              setQrModalPatient(p);
+                              setQrModalBox(b);
+                              setIsQRModalOpen(true);
+                            }}
+                            onAddPatient={handleAddPatient}
+                            onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
+                            onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
+                          />
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
               </section>
             )}
@@ -2621,56 +2655,59 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-5">
-              {visibleOtherBoxes.map((box) => {
-                const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
-                return (
-                  <div key={box.id} className="break-inside-avoid mb-5">
-                  <QueueBoxCard
-                    box={box}
-                    patients={boxPatients}
-                    allBoxes={boxes}
-                    isDragDisabled={!!searchQuery.trim() || !!selectedTherapistBoxId || statusFilter !== 'all'}
-                    isDragging={draggedBoxId === box.id}
-                    isDropTarget={dragOverBoxId === box.id && draggedBoxId !== box.id}
-                    onDragStartBox={handleDragStartBox}
-                    onDragEndBox={handleDragEndBox}
-                    onDragOverBox={handleDragOverBox}
-                    onDropBox={handleDropBox}
-                    onMoveBoxStep={handleMoveBoxStep}
-                    onTogglePin={handleTogglePin}
-                    onToggleCompletePatient={handleToggleCompletePatient}
-                    onCallPatient={handleCallPatient}
-                    onCallNextInBox={handleCallNextInBox}
-                    onClearUnread={handleClearBoxUnread}
-                    onAddPatientToBox={(bId) => {
-                      setAddPatientBoxId(bId);
-                      setIsAddPatientOpen(true);
-                    }}
-                    onViewHistory={(b) => {
-                      setHistoryBox(b);
-                      setIsHistoryOpen(true);
-                    }}
-                    onUpdateBoxColor={handleUpdateBoxColor}
-                    onUpdateBoxImage={handleUpdateBoxImage}
-                    onUpdateBoxImages={handleUpdateBoxImages}
-                    onDeleteBox={handleDeleteBox}
-                    onClearBoxPatients={handleClearBoxPatients}
-                    onDeletePatient={handleDeletePatient}
-                    onUpdatePatient={handleUpdatePatient}
-                    onEditBox={(b) => setEditingBox(b)}
-                    onOpenPatientQR={(p, b) => {
-                      setQrModalPatient(p);
-                      setQrModalBox(b);
-                      setIsQRModalOpen(true);
-                    }}
-                    onAddPatient={handleAddPatient}
-                    onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
-                    onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
-                  />
-                  </div>
-                );
-              })}
+            <div className="flex items-start gap-5">
+              {distributeIntoColumns(visibleOtherBoxes, boxColumnCount).map((column, columnIndex) => (
+                <div key={columnIndex} className="flex-1 min-w-0 flex flex-col gap-5">
+                  {column.map((box) => {
+                    const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
+                    return (
+                      <QueueBoxCard
+                        key={box.id}
+                        box={box}
+                        patients={boxPatients}
+                        allBoxes={boxes}
+                        isDragDisabled={!!searchQuery.trim() || !!selectedTherapistBoxId || statusFilter !== 'all'}
+                        isDragging={draggedBoxId === box.id}
+                        isDropTarget={dragOverBoxId === box.id && draggedBoxId !== box.id}
+                        onDragStartBox={handleDragStartBox}
+                        onDragEndBox={handleDragEndBox}
+                        onDragOverBox={handleDragOverBox}
+                        onDropBox={handleDropBox}
+                        onMoveBoxStep={handleMoveBoxStep}
+                        onTogglePin={handleTogglePin}
+                        onToggleCompletePatient={handleToggleCompletePatient}
+                        onCallPatient={handleCallPatient}
+                        onCallNextInBox={handleCallNextInBox}
+                        onClearUnread={handleClearBoxUnread}
+                        onAddPatientToBox={(bId) => {
+                          setAddPatientBoxId(bId);
+                          setIsAddPatientOpen(true);
+                        }}
+                        onViewHistory={(b) => {
+                          setHistoryBox(b);
+                          setIsHistoryOpen(true);
+                        }}
+                        onUpdateBoxColor={handleUpdateBoxColor}
+                        onUpdateBoxImage={handleUpdateBoxImage}
+                        onUpdateBoxImages={handleUpdateBoxImages}
+                        onDeleteBox={handleDeleteBox}
+                        onClearBoxPatients={handleClearBoxPatients}
+                        onDeletePatient={handleDeletePatient}
+                        onUpdatePatient={handleUpdatePatient}
+                        onEditBox={(b) => setEditingBox(b)}
+                        onOpenPatientQR={(p, b) => {
+                          setQrModalPatient(p);
+                          setQrModalBox(b);
+                          setIsQRModalOpen(true);
+                        }}
+                        onAddPatient={handleAddPatient}
+                        onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
+                        onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
+                      />
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           )}
         </section>
