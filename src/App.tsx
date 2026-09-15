@@ -2263,10 +2263,26 @@ export default function App() {
   const visiblePinnedBoxes = pinnedBoxes.filter(isBoxVisibleInSearch);
   const visibleOtherBoxes = otherBoxes.filter(isBoxVisibleInSearch);
 
+  const estimateBoxHeight = (box: QueueBox): number => {
+    const boxPatientCount = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box)).length;
+    const baseHeight = 160; // header + footer + empty-state placeholder
+    const perPatientHeight = 110;
+    const overloadWarningHeight = boxPatientCount > 5 ? 70 : 0;
+    return baseHeight + boxPatientCount * perPatientHeight + overloadWarningHeight;
+  };
+
   const distributeIntoColumns = (items: QueueBox[], columnCount: number): QueueBox[][] => {
     const columns: QueueBox[][] = Array.from({ length: columnCount }, () => []);
-    items.forEach((item, index) => {
-      columns[index % columnCount].push(item);
+    const columnHeights: number[] = Array(columnCount).fill(0);
+    items.forEach((item) => {
+      let shortestColumnIndex = 0;
+      for (let i = 1; i < columnCount; i++) {
+        if (columnHeights[i] < columnHeights[shortestColumnIndex]) {
+          shortestColumnIndex = i;
+        }
+      }
+      columns[shortestColumnIndex].push(item);
+      columnHeights[shortestColumnIndex] += estimateBoxHeight(item);
     });
     return columns;
   };
