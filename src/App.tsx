@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import { QueueBox, PatientItem, CallHistoryRecord, BoxColor, AppNotification, DailyPatientVisit, MasterPatient, PatientVisitHistoryItem, RanapQueueItem, RanapCategory, RanapHistoryItem } from './types';
 import { INITIAL_BOXES, INITIAL_PATIENTS, INITIAL_CALL_HISTORY } from './data/initialData';
@@ -451,6 +451,31 @@ export default function App() {
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(true);
   const knownPatientIdsRef = React.useRef<Set<string>>(new Set());
+  const [measuredBoxHeights, setMeasuredBoxHeights] = useState<Record<string, number>>({});
+  const boxResizeObserversRef = React.useRef<Record<string, ResizeObserver>>({});
+  const registerBoxHeightRef = useCallback((boxId: string) => (node: HTMLDivElement | null) => {
+    const existingObserver = boxResizeObserversRef.current[boxId];
+    if (existingObserver) {
+      existingObserver.disconnect();
+      delete boxResizeObserversRef.current[boxId];
+    }
+    if (!node) return;
+    const observer = new ResizeObserver((entries) => {
+      const newHeight = Math.round(entries[0].contentRect.height);
+      setMeasuredBoxHeights(prev => {
+        if (Math.abs((prev[boxId] || 0) - newHeight) < 4) return prev;
+        return { ...prev, [boxId]: newHeight };
+      });
+    });
+    observer.observe(node);
+    boxResizeObserversRef.current[boxId] = observer;
+  }, []);
+  useEffect(() => {
+    return () => {
+      Object.values(boxResizeObserversRef.current).forEach((observer: ResizeObserver) => observer.disconnect());
+      boxResizeObserversRef.current = {};
+    };
+  }, []);
   const [boxColumnCount, setBoxColumnCount] = useState(() => {
     if (typeof window === 'undefined') return 1;
     const w = window.innerWidth;
@@ -2282,7 +2307,7 @@ export default function App() {
         }
       }
       columns[shortestColumnIndex].push(item);
-      columnHeights[shortestColumnIndex] += estimateBoxHeight(item);
+      columnHeights[shortestColumnIndex] += measuredBoxHeights[item.id] ?? estimateBoxHeight(item);
     });
     return columns;
   };
@@ -2579,8 +2604,8 @@ export default function App() {
                       {column.map((box) => {
                         const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
                         return (
+                          <div key={box.id} ref={registerBoxHeightRef(box.id)}>
                           <QueueBoxCard
-                            key={box.id}
                             box={box}
                             patients={boxPatients}
                             allBoxes={boxes}
@@ -2622,6 +2647,7 @@ export default function App() {
                             onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
                             onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
                           />
+                          </div>
                         );
                       })}
                     </div>
@@ -2677,8 +2703,8 @@ export default function App() {
                   {column.map((box) => {
                     const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
                     return (
+                      <div key={box.id} ref={registerBoxHeightRef(box.id)}>
                       <QueueBoxCard
-                        key={box.id}
                         box={box}
                         patients={boxPatients}
                         allBoxes={boxes}
@@ -2720,6 +2746,7 @@ export default function App() {
                         onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
                         onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
                       />
+                      </div>
                     );
                   })}
                 </div>
