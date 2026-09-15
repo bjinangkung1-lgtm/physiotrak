@@ -43,7 +43,6 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
   const [isWarning, setIsWarning] = useState(false);
   const [isRanap, setIsRanap] = useState(false);
   const [note, setNote] = useState('');
-  const [showExtraDetails, setShowExtraDetails] = useState(false);
   const [showDbBrowser, setShowDbBrowser] = useState(false);
   const [dbSearchQuery, setDbSearchQuery] = useState('');
 
@@ -312,7 +311,6 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
     setPendingFiles([]);
     setIsUploadingPhotos(false);
     setSelectedMasterPatient(null);
-    setShowExtraDetails(false);
     setShowDbBrowser(false);
     onClose();
   };
@@ -701,69 +699,9 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="e.g. Nyeri leher kronis disertai vertigo posisional saat menoleh kiri, pasca kecelakaan motor 2 th lalu. Cek tensi sebelum terapi, pakai kursi roda."
-              rows={3}
+              rows={6}
               className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:ring-2 focus:ring-teal-500 resize-none"
             />
-          </div>
-
-          {/* Toggle Full Patient Identity Profile */}
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={() => setShowExtraDetails(!showExtraDetails)}
-              className="text-xs text-teal-700 font-bold hover:text-teal-900 flex items-center gap-1 cursor-pointer"
-            >
-              <span>{showExtraDetails ? '− Sembunyikan Data Profil Lengkap' : '+ Lengkapi Data Profil Pasien (NIK, Tgl Lahir, Alamat)'}</span>
-            </button>
-
-            {showExtraDetails && (
-              <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">NIK / No. BPJS</label>
-                    <input
-                      type="text"
-                      value={identityNumber}
-                      onChange={(e) => setIdentityNumber(e.target.value)}
-                      placeholder="16 Digit NIK/BPJS"
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-md text-xs font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Tgl Lahir</label>
-                    <input
-                      type="date"
-                      value={birthDate}
-                      onChange={(e) => setBirthDate(e.target.value)}
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-md text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Jenis Kelamin</label>
-                    <select
-                      value={gender}
-                      onChange={(e) => setGender(e.target.value as any)}
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-md text-xs bg-white"
-                    >
-                      <option value="">Pilih</option>
-                      <option value="L">Laki-laki (L)</option>
-                      <option value="P">Perempuan (P)</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Alamat Domisili</label>
-                  <input
-                    type="text"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    placeholder="Nama jalan, kelurahan, kota"
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-md text-xs"
-                  />
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Warning & Ranap Checkboxes */}
