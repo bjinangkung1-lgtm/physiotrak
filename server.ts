@@ -1991,8 +1991,17 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       // Stempel createdAt memakai jam SERVER (bukan jam device pengirim) saat pasien
       // pertama kali muncul di state bersama, supaya device dengan jam salah/mundur
       // tidak membuat entrinya disaring diam-diam oleh device lain saat reconcile.
-      patientMap.set(inP.id, { ...inP, createdAt: new Date().toISOString() });
+      const serverCreatedAt = new Date().toISOString();
+      patientMap.set(inP.id, {
+        ...inP,
+        createdAt: serverCreatedAt,
+        // Kalau pasien ini sudah berstatus selesai saat pertama kali muncul di server (mis.
+        // sinkron susulan dari device yang sempat offline), jam ceklis juga distempel pakai
+        // jam SERVER supaya tidak pernah lebih awal dari createdAt akibat jam device salah/mundur.
+        completedAt: inP.completed ? serverCreatedAt : inP.completedAt,
+      });
     } else {
+      const wasCompleted = Boolean(existing.completed);
       const isCompleted = Boolean(inP.completed || existing.completed);
       const calledCount = Math.max(Number(inP.calledCount || 0), Number(existing.calledCount || 0));
 
@@ -2000,9 +2009,13 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
         ? inP.lastCalledAt
         : existing.lastCalledAt;
 
-      const completedAt = inP.completedAt && (!existing.completedAt || new Date(inP.completedAt) >= new Date(existing.completedAt))
-        ? inP.completedAt
-        : existing.completedAt;
+      // Transisi baru menjadi selesai -> pakai jam SERVER, bukan jam device pengirim,
+      // supaya respon time (Input -> Ceklis) tidak pernah negatif akibat jam tablet yang salah/mundur.
+      const completedAt = (isCompleted && !wasCompleted)
+        ? new Date().toISOString()
+        : (inP.completedAt && (!existing.completedAt || new Date(inP.completedAt) >= new Date(existing.completedAt))
+          ? inP.completedAt
+          : existing.completedAt);
 
       patientMap.set(inP.id, {
         ...existing,

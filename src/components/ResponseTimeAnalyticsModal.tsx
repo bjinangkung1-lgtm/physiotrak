@@ -906,7 +906,9 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
 
                             <td className="p-3 text-center">
                               <span className={`inline-block px-2 py-0.5 rounded font-mono font-black text-xs ${
-                                p.waitStatus === 'delayed'
+                                p.isDataInvalid
+                                  ? 'bg-slate-700 text-white'
+                                  : p.waitStatus === 'delayed'
                                   ? 'bg-rose-600 text-white animate-pulse'
                                   : p.waitStatus === 'moderate'
                                   ? 'bg-amber-100 text-amber-800'
@@ -919,7 +921,11 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
                             </td>
 
                             <td className="p-3 text-center">
-                              {p.completed ? (
+                              {p.isDataInvalid ? (
+                                <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded font-bold text-[10px]" title="Jam ceklis selesai tercatat lebih awal dari jam input, kemungkinan jam tablet salah/mundur">
+                                  ⚠ Data Tidak Valid
+                                </span>
+                              ) : p.completed ? (
                                 <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold text-[10px]">
                                   Selesai
                                 </span>

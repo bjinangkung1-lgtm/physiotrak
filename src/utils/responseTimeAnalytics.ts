@@ -27,6 +27,9 @@ export interface PatientTimeMetrics {
   statusLabel: string;
   isCompliant: boolean;
   isCurrentlyWaiting: boolean;
+  // true kalau waktu ceklis selesai tercatat lebih awal dari waktu input (mustahil secara nyata,
+  // biasanya karena jam tablet yang mencatat ceklis salah/mundur) - dikecualikan dari rata-rata & SPM.
+  isDataInvalid?: boolean;
   formattedWait: string;
   formattedResponseTime: string;
   formattedService?: string;
@@ -54,6 +57,7 @@ export interface ResponseTimeAnalyticsSummary {
   totalPatients: number;
   activePatientsCount: number;
   completedPatientsCount: number;
+  invalidDataCount: number; // Jumlah data dengan jam ceklis < jam input (data tidak valid)
   avgWaitMinutes: number; // Rata-rata respon time (input ke ceklis)
   avgResponseMinutes: number;
   avgTotalMinutes: number;
@@ -107,10 +111,20 @@ export function calculatePatientTimeMetrics(
     : ((patient as any).officerName || 'Petugas');
 
   let responseTimeMinutes = 0;
+  let isDataInvalid = false;
 
   if (patient.completed && completedAt && !isNaN(completedAt.getTime()) && !isNaN(effectiveStartTime)) {
     // Respon time dihitung dari saat didaftarkan / ditulis hingga saat diceklis (dimulai paling awal dari jam buka 08:00 WIB)
-    responseTimeMinutes = Math.max(0, Math.round((completedAt.getTime() - effectiveStartTime) / 60000));
+    const rawMinutes = Math.round((completedAt.getTime() - effectiveStartTime) / 60000);
+    if (rawMinutes < 0) {
+      // Ceklis selesai tercatat lebih awal dari waktu input - mustahil secara nyata, biasanya
+      // karena jam tablet yang mencatat ceklis salah/mundur. Tandai sebagai data tidak valid
+      // alih-alih diam-diam ditampilkan sebagai "< 1 mnt" (yang menyesatkan laporan kepatuhan SPM).
+      isDataInvalid = true;
+      responseTimeMinutes = 0;
+    } else {
+      responseTimeMinutes = rawMinutes;
+    }
   } else if (patient.completed) {
     // Selesai tapi tidak ada timestamp completedAt spesifik
     const elapsedMinutes = !isNaN(effectiveStartTime) ? Math.round((now - effectiveStartTime) / 60000) : 25;
@@ -145,8 +159,11 @@ export function calculatePatientTimeMetrics(
     waitStatus = 'normal';
     statusLabel = 'Standar SPM (16-30m)';
   }
+  if (isDataInvalid) {
+    statusLabel = 'Data Tidak Valid (jam ceklis < jam input)';
+  }
 
-  const isCompliant = responseTimeMinutes <= 30;
+  const isCompliant = !isDataInvalid && responseTimeMinutes <= 30;
 
   return {
     patientId: patient.id,
@@ -171,10 +188,11 @@ export function calculatePatientTimeMetrics(
     statusLabel,
     isCompliant,
     isCurrentlyWaiting: !patient.completed,
-    formattedWait: formatMinutes(responseTimeMinutes),
-    formattedResponseTime: formatMinutes(responseTimeMinutes),
-    formattedService: formatMinutes(responseTimeMinutes),
-    formattedTotal: formatMinutes(totalMinutes),
+    isDataInvalid,
+    formattedWait: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
+    formattedResponseTime: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
+    formattedService: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
+    formattedTotal: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(totalMinutes),
   };
 }
 
@@ -188,8 +206,11 @@ export function computeResponseTimeAnalytics(
   const totalPatients = patientMetrics.length;
   const activePatientsCount = patientMetrics.filter(p => !p.completed).length;
   const completedPatientsCount = patientMetrics.filter(p => p.completed).length;
+  const invalidDataCount = patientMetrics.filter(p => p.isDataInvalid).length;
 
-  const completedMetrics = patientMetrics.filter(p => p.completed);
+  // Data tidak valid (jam ceklis < jam input, biasanya akibat jam tablet salah/mundur) dikecualikan
+  // dari rata-rata, distribusi, dan kepatuhan SPM supaya laporan tidak menyesatkan.
+  const completedMetrics = patientMetrics.filter(p => p.completed && !p.isDataInvalid);
 
   // Calculate Averages - Respon Time (Daftar -> Ceklis) hanya untuk pasien yang sudah selesai
   const allResponseMinutes = completedMetrics.map(p => p.responseTimeMinutes);
@@ -239,7 +260,7 @@ export function computeResponseTimeAnalytics(
       const activeBox = boxPatients.filter(p => !p.completed).length;
       const completedBox = boxPatients.filter(p => p.completed).length;
 
-      const boxCompletedMetrics = boxPatients.filter(p => p.completed);
+      const boxCompletedMetrics = boxPatients.filter(p => p.completed && !p.isDataInvalid);
 
       const bRespList = boxCompletedMetrics.map(p => p.responseTimeMinutes);
       const bAvgResp = bRespList.length > 0 ? Math.round(bRespList.reduce((a, b) => a + b, 0) / bRespList.length) : 0;
@@ -280,6 +301,7 @@ export function computeResponseTimeAnalytics(
     totalPatients,
     activePatientsCount,
     completedPatientsCount,
+    invalidDataCount,
     avgWaitMinutes,
     avgResponseMinutes,
     avgTotalMinutes,
