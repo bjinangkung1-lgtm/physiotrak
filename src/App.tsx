@@ -2526,12 +2526,12 @@ export default function App() {
                   <span>Di-Sematkan (Pinned Counters) ({visiblePinnedBoxes.length})</span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5 items-start">
+                <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-5">
                   {visiblePinnedBoxes.map((box) => {
                     const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
                     return (
+                      <div key={box.id} className="break-inside-avoid mb-5">
                       <QueueBoxCard
-                        key={box.id}
                         box={box}
                         patients={boxPatients}
                         allBoxes={boxes}
@@ -2573,6 +2573,7 @@ export default function App() {
                         onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
                         onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
                       />
+                      </div>
                     );
                   })}
                 </div>
@@ -2620,12 +2621,12 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5 items-start">
+            <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-5">
               {visibleOtherBoxes.map((box) => {
                 const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
                 return (
+                  <div key={box.id} className="break-inside-avoid mb-5">
                   <QueueBoxCard
-                    key={box.id}
                     box={box}
                     patients={boxPatients}
                     allBoxes={boxes}
@@ -2667,6 +2668,7 @@ export default function App() {
                     onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
                     onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
                   />
+                  </div>
                 );
               })}
             </div>
