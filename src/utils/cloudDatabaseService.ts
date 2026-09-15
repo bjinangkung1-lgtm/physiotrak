@@ -54,6 +54,23 @@ function handleFirestoreError(context: string, err: any): void {
   }
 }
 
+// PENTING: isExplicitReset/resetConfirmed di dokumen Firestore HANYA boleh
+// berarti "reset baru saja terjadi SAAT DOKUMEN INI DITULIS" - bukan properti
+// permanen. Firestore itu sendiri baru ter-mirror lagi setelah beberapa detik
+// (didebounce), jadi dokumennya BISA saja masih membawa isExplicitReset=true
+// dari reset lama walau antrean sekarang sudah normal berisi pasien. Kalau
+// dibiarkan apa adanya, setiap kali listener/snapshot ini menyala (termasuk
+// setiap kali halaman dibuka/refresh) klien akan mengira reset baru saja
+// terjadi LAGI dan mengosongkan tampilan pasiennya sendiri - persis gejala
+// "refresh hilang, refresh lagi timbul". Sinyal reset yang sungguhan tetap
+// sampai lewat siaran real-time (SSE/BroadcastChannel) saat reset ditekan;
+// pemfilteran pasien lama sebelum reset tetap aman lewat watermark
+// lastResetAt yang independen dari flag ini.
+function stripStaleResetFlags(state: SyncDataState | null): SyncDataState | null {
+  if (!state) return state;
+  return { ...state, isExplicitReset: false, resetConfirmed: false };
+}
+
 export const cloudDatabaseService = {
   // 1. Real-time Firestore Queue Sync listener
   subscribeQueueState(onUpdate: (state: SyncDataState) => void, onError?: (err: any) => void) {
@@ -62,7 +79,7 @@ export const cloudDatabaseService = {
       return onSnapshot(docRef, (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data() as SyncDataState;
-          onUpdate(data);
+          onUpdate(stripStaleResetFlags(data)!);
         }
       }, (err) => {
         handleFirestoreError('subscribeQueueState', err);
@@ -81,7 +98,7 @@ export const cloudDatabaseService = {
       const docRef = doc(db, QUEUE_DOC_PATH, QUEUE_DOC_ID);
       const snapshot = await getDoc(docRef);
       if (snapshot.exists()) {
-        return snapshot.data() as SyncDataState;
+        return stripStaleResetFlags(snapshot.data() as SyncDataState);
       }
       return null;
     } catch (err) {

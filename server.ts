@@ -3732,7 +3732,14 @@ app.get('/api/events', (req, res) => {
   try {
     const currentState = loadStateFromFile();
     if (currentState) {
-      res.write(`data: ${JSON.stringify({ type: 'INIT_STATE', state: currentState })}\n\n`);
+      // PENTING: sama seperti GET /api/queue - isExplicitReset/resetConfirmed
+      // di disk HANYA boleh berarti "reset baru saja terjadi SEKARANG", bukan
+      // properti permanen. Status INIT_STATE ini dikirim ke SETIAP klien yang
+      // baru terhubung (termasuk setiap kali halaman dibuka/refresh) - kalau
+      // disk kebetulan menyimpan flag ini true dari reset lama, klien akan
+      // mengira reset baru saja terjadi LAGI dan mengosongkan tampilan
+      // pasiennya sendiri walau data sebenarnya normal.
+      res.write(`data: ${JSON.stringify({ type: 'INIT_STATE', state: { ...currentState, isExplicitReset: false, resetConfirmed: false } })}\n\n`);
     }
   } catch (e) {
     console.warn(`[SSE] Failed sending initial state to client ${clientId}:`, e);
