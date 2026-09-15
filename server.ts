@@ -1590,12 +1590,20 @@ const FIRESTORE_QUOTA_FLAG_FILE = path.join(DATA_DIR, '.firestore_quota_disabled
 // DITOLAK Firestore karena kuota tidak menghabiskan kuota tambahan yang
 // berarti), jadi tidak ada kerugian mempersingkat jeda ini.
 const FIRESTORE_QUOTA_COOLDOWN_MS = 5 * 60 * 1000; // 5 menit
+// PENTING: kalau server restart PERSIS saat jeda kuota masih aktif (flag file
+// masih baru), tandai di sini supaya kita tahu perlu menjadwalkan ulang timer
+// pemulihan otomatisnya di bawah - sebelumnya IIFE ini hanya mengembalikan
+// true/false tanpa pernah memanggil scheduleFirestoreQuotaRetry(), jadi kalau
+// restart terjadi di tengah jeda, mirroring bisa tetap nonaktif SELAMANYA
+// (tidak ada lagi yang memicu percobaan ulang otomatis).
+let needsQuotaRetryScheduleOnBoot = false;
 let isFirestoreMirrorDisabled = (() => {
   try {
     if (fs.existsSync(FIRESTORE_QUOTA_FLAG_FILE)) {
       const content = fs.readFileSync(FIRESTORE_QUOTA_FLAG_FILE, 'utf-8');
       const flagTs = parseInt(content, 10);
       if (flagTs && Date.now() - flagTs < FIRESTORE_QUOTA_COOLDOWN_MS) {
+        needsQuotaRetryScheduleOnBoot = true;
         return true;
       }
       try { fs.unlinkSync(FIRESTORE_QUOTA_FLAG_FILE); } catch {}
@@ -1618,12 +1626,36 @@ function scheduleFirestoreQuotaRetry() {
   if (firestoreQuotaRetryTimer) {
     clearTimeout(firestoreQuotaRetryTimer);
   }
-  firestoreQuotaRetryTimer = setTimeout(() => {
+  firestoreQuotaRetryTimer = setTimeout(async () => {
     firestoreQuotaRetryTimer = null;
     isFirestoreMirrorDisabled = false;
     try { fs.unlinkSync(FIRESTORE_QUOTA_FLAG_FILE); } catch {}
     console.log('[FirestoreMirror] Jeda kuota selesai, mencoba mencadangkan ke Cloud Firestore lagi secara otomatis.');
+
+    // PENTING: langsung coba kirim ulang state TERBARU yang sempat gagal
+    // dicadangkan selama jeda kuota tadi, jangan cuma menunggu perubahan
+    // berikutnya (yang mungkin tidak pernah terjadi kalau device sudah
+    // dimatikan). Tanpa ini, state yang tertunda tetap tidak pernah sampai
+    // ke Firestore sampai ada aksi baru - dan kalau server restart sebelum
+    // itu terjadi, ia akan memulihkan versi LAMA dari Firestore.
+    if (pendingMirrorState) {
+      try {
+        const sanitized = JSON.parse(JSON.stringify(pendingMirrorState));
+        await setDoc(QUEUE_STATE_DOC_REF, {
+          ...sanitized,
+          lastMirroredAt: new Date().toISOString(),
+        });
+        console.log('[FirestoreMirror] Berhasil mengirim ulang state yang tertunda setelah jeda kuota berakhir.');
+      } catch (err: any) {
+        handleFirestoreQuotaError(err, 'FirestoreMirror-Retry');
+      }
+    }
   }, FIRESTORE_QUOTA_COOLDOWN_MS);
+}
+
+if (needsQuotaRetryScheduleOnBoot) {
+  console.log('[FirestoreMirror] Server dimulai ulang saat jeda kuota masih aktif, menjadwalkan percobaan otomatis lagi.');
+  scheduleFirestoreQuotaRetry();
 }
 
 function handleFirestoreQuotaError(err: any, label: string): boolean {
@@ -1645,12 +1677,23 @@ function handleFirestoreQuotaError(err: any, label: string): boolean {
 }
 
 async function mirrorStateToFirestore(state: any): Promise<void> {
+  // PENTING: selalu catat state TERBARU yang ingin dicadangkan, walau kuota
+  // sedang dalam masa jeda. Sebelumnya fungsi ini keluar duluan tanpa
+  // menyentuh pendingMirrorState sama sekali saat kuota habis - artinya
+  // perubahan (termasuk reset antrean) yang terjadi PERSIS selama jeda kuota
+  // hilang sepenuhnya dari Firestore, tidak pernah dicoba lagi walau jedanya
+  // sudah selesai, sampai ada perubahan BARU lain yang memicu mirror lagi.
+  // Kalau device dimatikan tepat setelah itu (server lalu restart & disk
+  // lokalnya kosong), server akan pulih dari Firestore yang masih versi LAMA
+  // (sebelum reset) - persis gejala "pasien yang sudah dibersihkan muncul
+  // lagi besok". Dengan selalu mengisi pendingMirrorState di sini, begitu
+  // jeda kuota berakhir kita bisa langsung coba kirim ulang state ini.
+  pendingMirrorState = state;
+
   // If Firestore mirror is disabled due to quota exhaustion, exit immediately
   if (isFirestoreMirrorDisabled) {
     return;
   }
-
-  pendingMirrorState = state;
 
   if (mirrorDebounceTimer) {
     clearTimeout(mirrorDebounceTimer);
