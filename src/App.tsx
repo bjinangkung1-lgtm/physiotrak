@@ -1963,28 +1963,6 @@ export default function App() {
     setPatients(prev => prev.filter(p => p.id !== patientId));
   };
 
-  // SEMENTARA: pembersih data uji coba "TES LOADTEST" yang tercampur di data produksi.
-  // Hapus tombol & fungsi ini setelah dipakai sekali.
-  const handleCleanupTestPatients = () => {
-    const testPatients = patients.filter(p =>
-      /^TES\s*LOADTEST/i.test((p.patientName || '').trim()) || /^TESLT/i.test(p.medicalRecordNo || '')
-    );
-    if (testPatients.length === 0) {
-      showAppToast('Tidak ada data uji coba (TES LOADTEST) yang ditemukan.');
-      return;
-    }
-    const confirmed = window.confirm(`Hapus ${testPatients.length} data uji coba (TES LOADTEST)? Tindakan ini tidak bisa dibatalkan.`);
-    if (!confirmed) return;
-
-    hasLocalMutationRef.current = true;
-    const testIds = new Set(testPatients.map(p => p.id));
-    testPatients.forEach(p => {
-      addLocalTombstone(p.id);
-      deletedPatientIdsRef.current.push(p.id);
-    });
-    setPatients(prev => prev.filter(p => !testIds.has(p.id)));
-    showAppToast(`${testPatients.length} data uji coba berhasil dihapus.`);
-  };
 
   // Update Patient Details
   const handleUpdatePatient = (updatedPatient: PatientItem) => {
@@ -2707,13 +2685,6 @@ export default function App() {
               onDeleteNote={handleDeleteCommunicationNote}
             />
 
-            {/* SEMENTARA: tombol pembersih data uji coba "TES LOADTEST". Hapus setelah dipakai sekali. */}
-            <button
-              onClick={handleCleanupTestPatients}
-              className="w-full text-xs font-bold text-slate-500 border border-dashed border-slate-300 rounded-xl py-2 hover:bg-slate-50 hover:text-slate-700 transition-colors cursor-pointer"
-            >
-              🧹 Bersihkan Data Uji Coba "TES LOADTEST" (Sementara)
-            </button>
 
             {/* PINNED BOXES SECTION */}
             {visiblePinnedBoxes.length > 0 && (
