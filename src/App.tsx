@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import confetti from 'canvas-confetti';
-import { QueueBox, PatientItem, CallHistoryRecord, BoxColor, AppNotification, DailyPatientVisit, MasterPatient, PatientVisitHistoryItem, RanapQueueItem, RanapCategory, RanapHistoryItem } from './types';
+import { QueueBox, PatientItem, CallHistoryRecord, BoxColor, AppNotification, DailyPatientVisit, MasterPatient, PatientVisitHistoryItem, RanapQueueItem, RanapCategory, RanapHistoryItem, CommunicationNote } from './types';
 import { INITIAL_BOXES, INITIAL_PATIENTS, INITIAL_CALL_HISTORY } from './data/initialData';
 import { getLocalDateStringWIB } from './utils/dateHelper';
 import { playChimeSound } from './utils/audio';
 import { Header } from './components/Header';
+import { CommunicationBoard } from './components/CommunicationBoard';
 import { QueueBoxCard } from './components/QueueBoxCard';
 import { AddPatientModal } from './components/AddPatientModal';
 import { RanapQueueModal } from './components/RanapQueueModal';
@@ -402,6 +403,82 @@ export default function App() {
 
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [communicationNotes, setCommunicationNotes] = useState<CommunicationNote[]>(() => {
+    try {
+      const saved = localStorage.getItem('antrian_communication_notes');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('antrian_communication_notes', JSON.stringify(communicationNotes));
+    } catch {
+      // ignore
+    }
+  }, [communicationNotes]);
+
+  const broadcastCommunicationNotes = (updatedNotes: CommunicationNote[], deletedNoteId?: string) => {
+    realtimeSync.broadcastState({
+      boxes,
+      patients,
+      ranapQueue,
+      callLogs,
+      notifications,
+      communicationNotes: updatedNotes,
+      ...(deletedNoteId ? { deletedCommunicationNoteIds: [deletedNoteId] } : {}),
+      lastUpdated: new Date().toISOString(),
+    });
+  };
+
+  const handleAddCommunicationNote = (input: { type: CommunicationNote['type']; authorName: string; message: string; targetBoxId?: string; targetBoxTitle?: string }) => {
+    const newNote: CommunicationNote = {
+      id: generateUniqueId('note'),
+      type: input.type,
+      authorName: input.authorName,
+      message: input.message,
+      targetBoxId: input.targetBoxId,
+      targetBoxTitle: input.targetBoxTitle,
+      createdAt: new Date().toISOString(),
+      readBy: [],
+      replies: [],
+    };
+    const updated = [newNote, ...communicationNotes];
+    setCommunicationNotes(updated);
+    broadcastCommunicationNotes(updated);
+  };
+
+  const handleMarkCommunicationNoteRead = (noteId: string, readerName: string) => {
+    const updated = communicationNotes.map(n => {
+      if (n.id !== noteId) return n;
+      if (n.readBy.some(r => r.name.toLowerCase() === readerName.toLowerCase())) return n;
+      return { ...n, readBy: [...n.readBy, { name: readerName, at: new Date().toISOString() }] };
+    });
+    setCommunicationNotes(updated);
+    broadcastCommunicationNotes(updated);
+  };
+
+  const handleReplyCommunicationNote = (noteId: string, input: { authorName: string; message: string }) => {
+    const newReply = {
+      id: generateUniqueId('reply'),
+      authorName: input.authorName,
+      message: input.message,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = communicationNotes.map(n => {
+      if (n.id !== noteId) return n;
+      return { ...n, replies: [...n.replies, newReply] };
+    });
+    setCommunicationNotes(updated);
+    broadcastCommunicationNotes(updated);
+  };
+
+  const handleDeleteCommunicationNote = (noteId: string) => {
+    const updated = communicationNotes.filter(n => n.id !== noteId);
+    setCommunicationNotes(updated);
+    broadcastCommunicationNotes(updated, noteId);
+  };
 
   // Filters & Controls
   const [searchQuery, setSearchQuery] = useState('');
@@ -905,6 +982,10 @@ export default function App() {
         setNotifications(prev => JSON.stringify(prev) === JSON.stringify(syncData.notifications) ? prev : syncData.notifications);
       }
 
+      if (syncData.communicationNotes && Array.isArray(syncData.communicationNotes)) {
+        setCommunicationNotes(prev => JSON.stringify(prev) === JSON.stringify(syncData.communicationNotes) ? prev : syncData.communicationNotes);
+      }
+
       if (Array.isArray(syncData.savedOfficers) && syncData.savedOfficers.length > 0) {
         try {
           localStorage.setItem('antrian_irm_saved_officers_v1', JSON.stringify(syncData.savedOfficers));
@@ -1039,6 +1120,7 @@ export default function App() {
             ranapQueue: cloudState.ranapQueue || [],
             callLogs: cloudState.callLogs || [],
             notifications: cloudState.notifications || [],
+            communicationNotes: cloudState.communicationNotes || [],
             lastResetAt: cloudState.lastResetAt || null,
             boxOrderUpdatedAt: boxOrderUpdatedAtRef.current || undefined,
             isExplicitReset: false,
@@ -1151,6 +1233,8 @@ export default function App() {
           }
 
           if (Array.isArray(data.state.notifications)) setNotifications(data.state.notifications);
+
+          if (Array.isArray(data.state.communicationNotes)) setCommunicationNotes(data.state.communicationNotes);
 
           if (Array.isArray(data.state.savedOfficers) && data.state.savedOfficers.length > 0) {
             try {
@@ -2589,6 +2673,16 @@ export default function App() {
                 </button>
               </div>
             )}
+
+            {/* COMMUNICATION BOARD (Admin <-> Terapis) */}
+            <CommunicationBoard
+              notes={communicationNotes}
+              boxes={boxes}
+              onAddNote={handleAddCommunicationNote}
+              onMarkRead={handleMarkCommunicationNoteRead}
+              onReply={handleReplyCommunicationNote}
+              onDeleteNote={handleDeleteCommunicationNote}
+            />
 
             {/* PINNED BOXES SECTION */}
             {visiblePinnedBoxes.length > 0 && (

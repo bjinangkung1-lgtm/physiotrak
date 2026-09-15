@@ -188,6 +188,30 @@ export interface CallHistoryRecord {
   notes?: string;
 }
 
+export interface CommunicationNoteReadReceipt {
+  name: string;
+  at: string; // ISO string
+}
+
+export interface CommunicationNoteReply {
+  id: string;
+  authorName: string;
+  message: string;
+  createdAt: string; // ISO string
+}
+
+export interface CommunicationNote {
+  id: string;
+  type: 'penting' | 'info' | 'pengumuman';
+  authorName: string;
+  message: string;
+  targetBoxId?: string;
+  targetBoxTitle?: string;
+  createdAt: string; // ISO string
+  readBy: CommunicationNoteReadReceipt[];
+  replies: CommunicationNoteReply[];
+}
+
 export interface PhotoRecord {
   id: string;
   url: string;

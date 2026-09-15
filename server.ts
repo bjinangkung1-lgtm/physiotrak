@@ -1484,6 +1484,7 @@ function getInitialServerState() {
     callLogs: [],
     notifications: [],
     ranapQueue: [],
+    communicationNotes: [],
     currentCallingPatient: null,
     currentCallingBox: null,
     boxOrderUpdatedAt: null,
@@ -1925,6 +1926,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       notifications: [],
       savedOfficers: Array.isArray(incomingPayload.savedOfficers) ? incomingPayload.savedOfficers : (existingState.savedOfficers || []),
       ranapQueue: Array.isArray(existingState.ranapQueue) ? existingState.ranapQueue : [],
+      communicationNotes: Array.isArray(existingState.communicationNotes) ? existingState.communicationNotes : [],
       currentCallingPatient: null,
       currentCallingBox: null,
       isExplicitReset: true,
@@ -1933,6 +1935,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       boxOrderUpdatedAt: incomingPayload.boxOrderUpdatedAt || existingState.boxOrderUpdatedAt || null,
       deletedPatientIds: [],
       deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
+      deletedCommunicationNoteIds: Array.isArray(existingState.deletedCommunicationNoteIds) ? existingState.deletedCommunicationNoteIds : [],
       lastUpdated: new Date().toISOString(),
     };
   }
@@ -2223,6 +2226,42 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   }
   const mergedOfficers = Array.from(officerMap.values());
 
+  // 6. Reconcile Communication Notes (Papan Komunikasi Admin <-> Terapis)
+  const existingCommNotesDeleted: string[] = Array.isArray(existingState.deletedCommunicationNoteIds) ? existingState.deletedCommunicationNoteIds : [];
+  const incomingCommNotesDeleted: string[] = Array.isArray(incomingPayload.deletedCommunicationNoteIds) ? incomingPayload.deletedCommunicationNoteIds : [];
+  const cumulativeDeletedCommNoteIds = Array.from(new Set([...existingCommNotesDeleted, ...incomingCommNotesDeleted])).slice(-500);
+  const deletedCommNoteIdsSet = new Set(cumulativeDeletedCommNoteIds);
+
+  const existingCommNotes: any[] = Array.isArray(existingState.communicationNotes) ? existingState.communicationNotes : [];
+  const incomingCommNotes: any[] = Array.isArray(incomingPayload.communicationNotes) ? incomingPayload.communicationNotes : [];
+  const commNoteMap = new Map<string, any>();
+  for (const n of existingCommNotes) {
+    if (n && n.id && !deletedCommNoteIdsSet.has(n.id)) commNoteMap.set(n.id, n);
+  }
+  for (const inN of incomingCommNotes) {
+    if (!inN || !inN.id || deletedCommNoteIdsSet.has(inN.id)) continue;
+    const existingNote = commNoteMap.get(inN.id);
+    if (!existingNote) {
+      commNoteMap.set(inN.id, inN);
+    } else {
+      const readByMap = new Map<string, any>();
+      for (const r of (existingNote.readBy || [])) if (r && r.name) readByMap.set(r.name, r);
+      for (const r of (inN.readBy || [])) if (r && r.name && !readByMap.has(r.name)) readByMap.set(r.name, r);
+      const replyMap = new Map<string, any>();
+      for (const r of (existingNote.replies || [])) if (r && r.id) replyMap.set(r.id, r);
+      for (const r of (inN.replies || [])) if (r && r.id) replyMap.set(r.id, r);
+      commNoteMap.set(inN.id, {
+        ...existingNote,
+        ...inN,
+        readBy: Array.from(readByMap.values()),
+        replies: Array.from(replyMap.values()).sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()),
+      });
+    }
+  }
+  const mergedCommNotes = Array.from(commNoteMap.values())
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .slice(0, 200);
+
   const currentCallingPatient = incomingPayload.currentCallingPatient !== undefined
     ? incomingPayload.currentCallingPatient
     : (existingState.currentCallingPatient || null);
@@ -2238,6 +2277,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
     callLogs: mergedLogs,
     notifications: mergedNotifs,
     savedOfficers: mergedOfficers,
+    communicationNotes: mergedCommNotes,
     currentCallingPatient,
     currentCallingBox,
     isExplicitReset: Boolean(existingState?.isExplicitReset && mergedPatients.length === 0),
@@ -2246,6 +2286,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
     boxOrderUpdatedAt: effectiveBoxOrderUpdatedAt,
     deletedPatientIds: cumulativeDeletedList,
     deletedRanapIds: cumulativeDeletedRanapList,
+    deletedCommunicationNoteIds: cumulativeDeletedCommNoteIds,
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -2350,6 +2391,7 @@ app.post('/api/queue/reset', async (req, res) => {
         callLogs: [],
         notifications: [],
         savedOfficers: Array.isArray(existingState.savedOfficers) ? existingState.savedOfficers : [],
+        communicationNotes: Array.isArray(existingState.communicationNotes) ? existingState.communicationNotes : [],
         currentCallingPatient: null,
         currentCallingBox: null,
         isExplicitReset: true,
@@ -2358,6 +2400,7 @@ app.post('/api/queue/reset', async (req, res) => {
         boxOrderUpdatedAt: existingState.boxOrderUpdatedAt || null,
         deletedPatientIds: [],
         deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
+        deletedCommunicationNoteIds: Array.isArray(existingState.deletedCommunicationNoteIds) ? existingState.deletedCommunicationNoteIds : [],
         lastUpdated: new Date().toISOString(),
       };
 

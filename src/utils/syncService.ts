@@ -1,4 +1,4 @@
-import { QueueBox, PatientItem, CallHistoryRecord, AppNotification, SavedOfficer, RanapQueueItem } from '../types';
+import { QueueBox, PatientItem, CallHistoryRecord, AppNotification, SavedOfficer, RanapQueueItem, CommunicationNote } from '../types';
 import { cloudDatabaseService } from './cloudDatabaseService';
 import { syncAppPasswordFromCloud } from './appAuthService';
 import { syncDatabasePasswordFromCloud } from './databaseService';
@@ -10,6 +10,8 @@ export interface SyncDataState {
   notifications: AppNotification[];
   savedOfficers?: SavedOfficer[];
   ranapQueue?: RanapQueueItem[];
+  communicationNotes?: CommunicationNote[];
+  deletedCommunicationNoteIds?: string[];
   currentCallingPatient?: PatientItem | null;
   currentCallingBox?: QueueBox | null;
   lastUpdated?: string;
