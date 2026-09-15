@@ -2282,7 +2282,19 @@ app.post('/api/security-config', (req, res) => {
 // GET current state
 app.get('/api/queue', (req, res) => {
   const state = loadStateFromFile();
-  res.json({ status: 'ok', state });
+  // PENTING: isExplicitReset/resetConfirmed HANYA boleh berarti "reset baru saja
+  // terjadi SEKARANG" - bukan properti permanen yang ikut tersimpan di disk.
+  // Kalau field ini diteruskan apa adanya dari disk, dan disk KEBETULAN
+  // menyimpannya true dari reset lama (mis. karena antrean sempat benar-benar
+  // kosong), maka SETIAP klien yang me-refresh/membuka aplikasi dan membaca
+  // status ini akan mengira reset baru saja terjadi lagi, lalu mengosongkan
+  // tampilan pasiennya sendiri - walau pasien di server sebenarnya ada/normal
+  // (persis gejala "refresh hilang, refresh lagi timbul" yang dilaporkan).
+  // Sinyal reset yang SUNGGUHAN sudah dikirim lewat siaran real-time saat
+  // /api/queue/reset dipanggil; endpoint baca biasa ini tidak perlu (dan tidak
+  // boleh) ikut memicu itu lagi.
+  const { isExplicitReset, resetConfirmed, ...safeState } = state || {};
+  res.json({ status: 'ok', state: { ...safeState, isExplicitReset: false, resetConfirmed: false } });
 });
 
 // GET status kesehatan sistem (dipakai klien untuk menampilkan peringatan kalau
