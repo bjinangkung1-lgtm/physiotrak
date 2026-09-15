@@ -1111,13 +1111,13 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Catatan Tambahan</label>
-                      <input
-                        type="text"
+                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Catatan Klinis / Kondisi Pasien</label>
+                      <textarea
                         value={editNote}
                         onChange={(e) => setEditNote(e.target.value)}
-                        placeholder="Catatan khusus..."
-                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:ring-2 focus:ring-teal-500 focus:bg-white"
+                        placeholder="Catatan klinis / kondisi pasien..."
+                        rows={3}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:ring-2 focus:ring-teal-500 focus:bg-white resize-none"
                       />
                     </div>
 

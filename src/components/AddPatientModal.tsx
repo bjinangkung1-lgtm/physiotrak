@@ -893,14 +893,14 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
           {/* Notes */}
           <div>
             <label className="block font-bold text-slate-800 mb-1">
-              Catatan Khusus Pasien
+              Catatan Klinis / Kondisi Pasien <span className="font-normal text-slate-400">(opsional)</span>
             </label>
-            <input
-              type="text"
+            <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="e.g. Cek tensi sebelum terapi, pakai kursi roda"
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:ring-2 focus:ring-teal-500"
+              placeholder="e.g. Nyeri leher kronis disertai vertigo posisional saat menoleh kiri, pasca kecelakaan motor 2 th lalu. Cek tensi sebelum terapi, pakai kursi roda."
+              rows={3}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-900 focus:ring-2 focus:ring-teal-500 resize-none"
             />
           </div>
 
