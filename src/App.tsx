@@ -2271,19 +2271,13 @@ export default function App() {
         body: JSON.stringify({ date: today, visits: currentVisits }),
       }).catch(err => console.warn('Failed to commit daily archive batch on reset:', err));
 
-      // Flush to Cloud Firestore daily archive
-      cloudDatabaseService.getAllDailyArchives().then(archives => {
-        const existing = archives[today] || [];
-        const map = new Map<string, DailyPatientVisit>();
-        existing.forEach(v => { if (v && v.id) map.set(v.id, v); });
-        currentVisits.forEach(v => {
-          if (v && v.id) {
-            const prev = map.get(v.id);
-            map.set(v.id, { ...prev, ...v });
-          }
-        });
-        return cloudDatabaseService.saveDailyArchive(today, Array.from(map.values()));
-      }).catch(err => console.warn('Failed to save daily archive to cloud on reset:', err));
+      // Catatan: dulu di sini ada push tambahan ke koleksi Firestore lama `daily_archives`
+      // lewat baca-seluruh-koleksi -> ubah -> tulis-seluruh-array. Sudah dihapus karena race
+      // condition antar beberapa perangkat/tab yang menekan "Bersihkan Antrean"/menyelesaikan
+      // pasien nyaris bersamaan bisa saling menimpa dokumen tanggal yang sama, membuat status
+      // "selesai" balik jadi "berjalan" di laporan Respon Time. Server (baris di atas) sudah
+      // aman lewat antrian tulis (enqueueQueueWrite) dan sudah punya mirror Firestore sendiri
+      // (mirrorArchiveMonthToFirestore di server.ts) sebagai cadangan cloud.
     }
 
     // 3. Call server explicit purge endpoint

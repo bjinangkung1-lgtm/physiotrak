@@ -850,22 +850,13 @@ export const databaseService = {
         savedVisit = data.visit;
       }
 
-      // Also persist to Cloud Firestore
-      if (visit && visit.id) {
-        cloudDatabaseService.getAllDailyArchives().then(archives => {
-          const currentList = archives[targetDate] || [];
-          const idx = currentList.findIndex(v => v.id === visit.id);
-          let updatedList: DailyPatientVisit[];
-          if (idx >= 0) {
-            updatedList = [...currentList];
-            updatedList[idx] = { ...updatedList[idx], ...(savedVisit || visit) } as DailyPatientVisit;
-          } else {
-            updatedList = [ ...currentList, (savedVisit || visit) as DailyPatientVisit ];
-          }
-          cloudDatabaseService.saveDailyArchive(targetDate, updatedList).catch(console.warn);
-        }).catch(console.warn);
-      }
-
+      // Catatan: dulu di sini ada push tambahan ke koleksi Firestore lama `daily_archives`
+      // lewat baca-seluruh-koleksi -> ubah -> tulis-seluruh-array. Itu race condition antar
+      // beberapa perangkat/tab (dua perangkat menulis dokumen tanggal yang sama nyaris
+      // bersamaan bisa saling menimpa, membuat status "selesai" balik jadi "berjalan").
+      // Sudah dihapus - server (baris di atas) sudah menyimpan dengan aman lewat antrian
+      // tulis (enqueueQueueWrite), dan server sendiri sudah punya mirror ke Firestore
+      // (mirrorArchiveMonthToFirestore di server.ts) yang jadi cadangan cloud yang aman.
       return savedVisit || (visit as DailyPatientVisit);
     } catch (err) {
       console.error('Failed to save daily visit:', err);
