@@ -94,11 +94,21 @@ export function calculatePatientTimeMetrics(
 ): PatientTimeMetrics {
   const registeredAt = new Date(patient.createdAt);
   const regTime = registeredAt.getTime();
-  const effectiveStartTime = !isNaN(regTime)
-    ? (clampToServiceStart
-      ? Math.max(regTime, getServiceStartTimestampWIB(registeredAt, SERVICE_START_HOUR_WIB))
-      : regTime)
-    : regTime;
+  const serviceStartTime = !isNaN(regTime) ? getServiceStartTimestampWIB(registeredAt, SERVICE_START_HOUR_WIB) : NaN;
+
+  // Jam mulai HANYA digeser maju ke jam buka (08:00 WIB) kalau acuan akhirnya (jam ceklis, atau
+  // jam sekarang kalau belum selesai) memang jatuh di jam buka atau sesudahnya - supaya pasien
+  // yang SELURUH riwayatnya (daftar sampai ceklis) terjadi sebelum jam buka (mis. Antrian
+  // Jemputan tengah malam) tidak dibandingkan terhadap jam mulai yang lebih telat dari jam
+  // ceklisnya sendiri, yang akan selalu menghasilkan durasi negatif / "Data Tidak Valid" palsu.
+  const getEffectiveStartTime = (referenceTime: number): number => {
+    if (isNaN(regTime)) return regTime;
+    if (!clampToServiceStart || isNaN(serviceStartTime) || serviceStartTime > referenceTime) {
+      return regTime;
+    }
+    return Math.max(regTime, serviceStartTime);
+  };
+
   const calledAt = patient.lastCalledAt ? new Date(patient.lastCalledAt) : undefined;
   const completedAt = patient.completedAt ? new Date(patient.completedAt) : undefined;
 
@@ -113,10 +123,11 @@ export function calculatePatientTimeMetrics(
   let responseTimeMinutes = 0;
   let isDataInvalid = false;
 
-  if (patient.completed && completedAt && !isNaN(completedAt.getTime()) && !isNaN(effectiveStartTime)) {
+  if (patient.completed && completedAt && !isNaN(completedAt.getTime())) {
     // Respon time dihitung dari saat didaftarkan / ditulis hingga saat diceklis (dimulai paling awal dari jam buka 08:00 WIB)
-    const rawMinutes = Math.round((completedAt.getTime() - effectiveStartTime) / 60000);
-    if (rawMinutes < 0) {
+    const effectiveStartTime = getEffectiveStartTime(completedAt.getTime());
+    const rawMinutes = !isNaN(effectiveStartTime) ? Math.round((completedAt.getTime() - effectiveStartTime) / 60000) : NaN;
+    if (isNaN(rawMinutes) || rawMinutes < 0) {
       // Ceklis selesai tercatat lebih awal dari waktu input - mustahil secara nyata, biasanya
       // karena jam tablet yang mencatat ceklis salah/mundur. Tandai sebagai data tidak valid
       // alih-alih diam-diam ditampilkan sebagai "< 1 mnt" (yang menyesatkan laporan kepatuhan SPM).
@@ -127,6 +138,7 @@ export function calculatePatientTimeMetrics(
     }
   } else if (patient.completed) {
     // Selesai tapi tidak ada timestamp completedAt spesifik
+    const effectiveStartTime = getEffectiveStartTime(now);
     const elapsedMinutes = !isNaN(effectiveStartTime) ? Math.round((now - effectiveStartTime) / 60000) : 25;
     if (elapsedMinutes > 180 || elapsedMinutes < 0) {
       responseTimeMinutes = 25; // standar durasi tindakan terapi IRM
@@ -135,6 +147,7 @@ export function calculatePatientTimeMetrics(
     }
   } else {
     // Pasien masih antre / berjalan -> Waktu respon dihitung dari pendaftaran hingga saat ini (dimulai paling awal dari jam buka 08:00 WIB)
+    const effectiveStartTime = getEffectiveStartTime(now);
     const isToday = !isNaN(regTime) && new Date().toDateString() === registeredAt.toDateString();
     const elapsedMinutes = !isNaN(effectiveStartTime) ? Math.round((now - effectiveStartTime) / 60000) : 15;
     if (!isToday && elapsedMinutes > 180) {
