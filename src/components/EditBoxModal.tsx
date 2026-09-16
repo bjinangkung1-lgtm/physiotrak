@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Edit3, Trash2, Activity, Sparkles, MessageSquare } from 'lucide-react';
+import { X, Edit3, Trash2, Activity, Sparkles, MessageSquare, Lock } from 'lucide-react';
 import { QueueBox, BoxColor } from '../types';
 import { getTherapistCategory } from '../utils/savedOfficersService';
 
@@ -162,19 +162,18 @@ export const EditBoxModal: React.FC<EditBoxModalProps> = ({
           </div>
 
           <div>
-            <label className="block font-bold text-slate-800 mb-1">
-              Judul Kotak Antrian (Identitas Petugas / Poli) *
+            <label className="flex items-center gap-1.5 font-bold text-slate-800 mb-1">
+              Judul Kotak Antrian (Identitas Petugas / Poli)
+              <Lock className="w-3 h-3 text-slate-400" />
             </label>
             <input
               type="text"
-              required
+              readOnly
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Contoh: POLI UMUM 01 / NAJJAH"
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-bold text-slate-900 focus:ring-2 focus:ring-blue-600"
+              className="w-full px-3 py-2 border border-slate-200 bg-slate-100 rounded-lg text-xs font-bold text-slate-500 cursor-not-allowed"
             />
             <p className="text-[10px] text-slate-500 mt-1">
-              Judul kotak ini langsung menjadi acuan nama terapis/petugas pada laporan dan monitor.
+              Nama kotak dikunci untuk mencegah salah ubah / tertukar antar terapis. Hubungi admin/pengembang aplikasi kalau memang perlu diganti.
             </p>
           </div>
 
