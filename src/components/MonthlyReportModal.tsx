@@ -72,7 +72,10 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
           }
         });
 
-        // Merge serverVisits and cloudList
+        // Merge serverVisits and cloudList. Server (file lokal, selalu terbaru lewat upsert
+        // aditif yang aman) HARUS menang atas cloudList (koleksi Firestore lama yang ditulis
+        // langsung oleh browser lewat baca-ubah-tulis seluruh array - rawan race antar beberapa
+        // perangkat/tab). Cloud hanya mengisi kunjungan yang server-nya benar-benar tidak punya.
         const visitsMap = new Map<string, DailyPatientVisit>();
         serverVisits.forEach(v => {
           const key = `${v.id}_${v.visitDate || ''}`;
@@ -80,8 +83,9 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
         });
         cloudList.forEach(v => {
           const key = `${v.id}_${v.visitDate || ''}`;
-          const existing = visitsMap.get(key);
-          visitsMap.set(key, { ...existing, ...v });
+          if (!visitsMap.has(key)) {
+            visitsMap.set(key, v);
+          }
         });
 
         const merged = Array.from(visitsMap.values());

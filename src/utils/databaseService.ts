@@ -780,13 +780,17 @@ export const databaseService = {
         const serverDates = serverResponse?.allDates || [targetDate];
         const allUniqueDates = Array.from(new Set([targetDate, ...serverDates, ...cloudDates])).sort().reverse();
 
-        // Merge visits for target date (prioritize richer visit objects)
+        // Merge visits for target date. Server (dari file lokal, selalu terbaru dan konsisten
+        // lewat upsert aditif yang aman) HARUS menang atas cloudVisits (koleksi Firestore lama
+        // yang ditulis langsung oleh browser lewat baca-ubah-tulis seluruh array - rawan race
+        // antar beberapa perangkat/tab yang bisa membuat status "selesai" balik jadi "berjalan"
+        // kalau salinan cloud kebetulan lebih basi). Cloud HANYA dipakai untuk mengisi kunjungan
+        // yang server-nya benar-benar tidak punya sama sekali (mis. disk lokal baru saja hilang).
         const mergedVisitsMap = new Map<string, DailyPatientVisit>();
         (serverResponse?.visits || []).forEach(v => { if (v && v.id) mergedVisitsMap.set(v.id, v); });
         cloudVisits.forEach(v => {
-          if (v && v.id) {
-            const existing = mergedVisitsMap.get(v.id);
-            mergedVisitsMap.set(v.id, { ...existing, ...v });
+          if (v && v.id && !mergedVisitsMap.has(v.id)) {
+            mergedVisitsMap.set(v.id, v);
           }
         });
         const combinedVisits = Array.from(mergedVisitsMap.values());
