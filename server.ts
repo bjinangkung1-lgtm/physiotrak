@@ -1488,6 +1488,8 @@ function getInitialServerState() {
     currentCallingPatient: null,
     currentCallingBox: null,
     boxOrderUpdatedAt: null,
+    deletedPatientIds: [],
+    preResetPatientIds: [],
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -1962,6 +1964,14 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
 
   if (isExplicitReset) {
     const resetTime = incomingPayload.lastResetAt || new Date().toISOString();
+    // Ingat id-id pasien yang baru saja dihapus reset ini, digabung dengan daftar
+    // dari reset-reset sebelumnya. Ini dipakai untuk menolak pasien "hantu" yang
+    // dikirim ulang oleh device yang belum sempat sinkron reset (mis. layar sempat
+    // off semalaman), TANPA bergantung pada jam device pengirim yang bisa salah/mundur.
+    const preResetPatientIds = Array.from(new Set([
+      ...(Array.isArray(existingState.preResetPatientIds) ? existingState.preResetPatientIds : []),
+      ...(Array.isArray(existingState.patients) ? existingState.patients.map((p: any) => p && p.id).filter(Boolean) : []),
+    ])).slice(-2000);
     return {
       boxes: Array.isArray(incomingPayload.boxes) && incomingPayload.boxes.length > 0 ? incomingPayload.boxes : (existingState.boxes || []),
       patients: [],
@@ -1977,6 +1987,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       lastResetAt: resetTime,
       boxOrderUpdatedAt: incomingPayload.boxOrderUpdatedAt || existingState.boxOrderUpdatedAt || null,
       deletedPatientIds: [],
+      preResetPatientIds,
       deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
       deletedCommunicationNoteIds: Array.isArray(existingState.deletedCommunicationNoteIds) ? existingState.deletedCommunicationNoteIds : [],
       lastUpdated: new Date().toISOString(),
@@ -1992,42 +2003,33 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       effectiveResetAt = incomingResetAt;
     }
   }
-  const resetEpoch = effectiveResetAt ? new Date(effectiveResetAt).getTime() : 0;
-
   // 1. Reconcile Patients
   const existingPatients: any[] = Array.isArray(existingState.patients) ? existingState.patients : [];
   const incomingPatients: any[] = Array.isArray(incomingPayload.patients) ? incomingPayload.patients : [];
-  
+
   // Accumulate deleted patient tombstones across devices and sessions
   const existingDeleted: string[] = Array.isArray(existingState.deletedPatientIds) ? existingState.deletedPatientIds : [];
   const incomingDeleted: string[] = Array.isArray(incomingPayload.deletedPatientIds) ? incomingPayload.deletedPatientIds : [];
   const cumulativeDeletedList = Array.from(new Set([...existingDeleted, ...incomingDeleted])).slice(-1000);
   const deletedPatientIds = new Set(cumulativeDeletedList);
 
+  // Id pasien yang sudah dihapus oleh reset (bukan berdasarkan jam, tapi id spesifik),
+  // supaya device yang belum sinkron reset tidak bisa menghidupkan lagi pasien lama —
+  // dan supaya pasien BARU (id baru, dibuat setelah reset) tidak pernah ikut tersaring
+  // hanya karena jam device yang menginputnya salah/mundur.
+  const preResetPatientIds = new Set<string>(
+    Array.isArray(existingState.preResetPatientIds) ? existingState.preResetPatientIds : []
+  );
+
   const patientMap = new Map<string, any>();
   for (const p of existingPatients) {
-    if (p && p.id && !deletedPatientIds.has(p.id)) {
-      // Discard stale patients created before or at the last reset watermark
-      if (resetEpoch > 0) {
-        const itemTime = new Date(p.createdAt || p.registeredAt || 0).getTime();
-        if (!itemTime || itemTime <= resetEpoch) {
-          continue;
-        }
-      }
+    if (p && p.id && !deletedPatientIds.has(p.id) && !preResetPatientIds.has(p.id)) {
       patientMap.set(p.id, { ...p });
     }
   }
 
   for (const inP of incomingPatients) {
-    if (!inP || !inP.id || deletedPatientIds.has(inP.id)) continue;
-
-    // Discard stale incoming patients created before or at the last reset watermark
-    if (resetEpoch > 0) {
-      const itemTime = new Date(inP.createdAt || inP.registeredAt || 0).getTime();
-      if (!itemTime || itemTime <= resetEpoch) {
-        continue;
-      }
-    }
+    if (!inP || !inP.id || deletedPatientIds.has(inP.id) || preResetPatientIds.has(inP.id)) continue;
 
     const existing = patientMap.get(inP.id);
     if (!existing) {
@@ -2341,6 +2343,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
     lastResetAt: effectiveResetAt || null,
     boxOrderUpdatedAt: effectiveBoxOrderUpdatedAt,
     deletedPatientIds: cumulativeDeletedList,
+    preResetPatientIds: Array.from(preResetPatientIds),
     deletedRanapIds: cumulativeDeletedRanapList,
     deletedCommunicationNoteIds: cumulativeDeletedCommNoteIds,
     lastUpdated: new Date().toISOString(),
@@ -2440,6 +2443,10 @@ app.post('/api/queue/reset', async (req, res) => {
 
     await enqueueQueueWrite(async () => {
       const existingState = loadStateFromFile() || getInitialServerState();
+      const preResetPatientIds = Array.from(new Set([
+        ...(Array.isArray(existingState.preResetPatientIds) ? existingState.preResetPatientIds : []),
+        ...(Array.isArray(existingState.patients) ? existingState.patients.map((p: any) => p && p.id).filter(Boolean) : []),
+      ])).slice(-2000);
       const resetState = {
         boxes: Array.isArray(existingState.boxes) && existingState.boxes.length > 0 ? existingState.boxes : getInitialServerState().boxes,
         patients: [],
@@ -2455,6 +2462,7 @@ app.post('/api/queue/reset', async (req, res) => {
         lastResetAt: resetTime,
         boxOrderUpdatedAt: existingState.boxOrderUpdatedAt || null,
         deletedPatientIds: [],
+        preResetPatientIds,
         deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
         deletedCommunicationNoteIds: Array.isArray(existingState.deletedCommunicationNoteIds) ? existingState.deletedCommunicationNoteIds : [],
         lastUpdated: new Date().toISOString(),
