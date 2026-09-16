@@ -2033,17 +2033,33 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
 
     const existing = patientMap.get(inP.id);
     if (!existing) {
-      // Stempel createdAt memakai jam SERVER (bukan jam device pengirim) saat pasien
-      // pertama kali muncul di state bersama, supaya device dengan jam salah/mundur
-      // tidak membuat entrinya disaring diam-diam oleh device lain saat reconcile.
-      const serverCreatedAt = new Date().toISOString();
+      // Percayai jam ASLI device untuk pasien yang benar-benar baru, SELAMA masih masuk akal
+      // (tidak di masa depan lebih dari beberapa menit, tidak lebih dari 48 jam ke belakang) -
+      // supaya pasien yang diinput lalu perangkatnya dimatikan/offline sebelum sempat
+      // tersinkron tetap mencatat jam INPUT ASLINYA untuk laporan respon time, bukan "jam
+      // saat online lagi" (gejala yang dilaporkan: respon time tercatat dari saat dibuka,
+      // bukan dari saat input). Kalau jam device jelas tidak masuk akal (mis. jam/tanggal
+      // salah total), baru pakai jam SERVER sebagai jaring pengaman.
+      const nowMs = Date.now();
+      const serverNow = new Date(nowMs).toISOString();
+      const clientCreatedMs = inP.createdAt ? new Date(inP.createdAt).getTime() : NaN;
+      const isPlausibleCreated = !isNaN(clientCreatedMs)
+        && clientCreatedMs <= nowMs + 5 * 60 * 1000
+        && clientCreatedMs >= nowMs - 48 * 60 * 60 * 1000;
+      const effectiveCreatedAt = isPlausibleCreated ? inP.createdAt : serverNow;
+
+      const clientCompletedMs = inP.completedAt ? new Date(inP.completedAt).getTime() : NaN;
+      const isPlausibleCompleted = !isNaN(clientCompletedMs)
+        && clientCompletedMs <= nowMs + 5 * 60 * 1000
+        && clientCompletedMs >= new Date(effectiveCreatedAt).getTime();
+      const effectiveCompletedAt = inP.completed
+        ? (isPlausibleCompleted ? inP.completedAt : serverNow)
+        : inP.completedAt;
+
       patientMap.set(inP.id, {
         ...inP,
-        createdAt: serverCreatedAt,
-        // Kalau pasien ini sudah berstatus selesai saat pertama kali muncul di server (mis.
-        // sinkron susulan dari device yang sempat offline), jam ceklis juga distempel pakai
-        // jam SERVER supaya tidak pernah lebih awal dari createdAt akibat jam device salah/mundur.
-        completedAt: inP.completed ? serverCreatedAt : inP.completedAt,
+        createdAt: effectiveCreatedAt,
+        completedAt: effectiveCompletedAt,
       });
     } else {
       const wasCompleted = Boolean(existing.completed);
