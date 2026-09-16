@@ -231,6 +231,15 @@ export const getLocalRanapTombstones = ranapTombstoneStore.getTombstones;
 export const addLocalRanapTombstone = ranapTombstoneStore.addTombstone;
 export const clearLocalRanapTombstones = ranapTombstoneStore.clearTombstones;
 
+// Id pasien yang sudah dihapus reset (bukan berdasarkan jam device, tapi id spesifik dari
+// server) - dipakai supaya pasien BARU tidak pernah ikut tersaring hanya karena jam tablet
+// yang menginputnya salah/mundur, sekaligus tetap menahan pasien lama yang mencoba "hidup
+// lagi" dari device yang belum sinkron reset.
+const preResetPatientStore = createLocalTombstoneStore('antrian_pre_reset_patient_ids', 2000);
+export const getLocalPreResetPatientIds = preResetPatientStore.getTombstones;
+export const addLocalPreResetPatientId = preResetPatientStore.addTombstone;
+export const clearLocalPreResetPatientIds = preResetPatientStore.clearTombstones;
+
 // Safe recency-based box content reconciler: ensures newer color/name changes aren't overwritten by stale broadcasts
 export const mergeBoxesByRecency = (currentBoxes: QueueBox[], incomingRaw: QueueBox[], deletedBoxIds?: string[]): QueueBox[] => {
   const localBoxTombstones = getLocalBoxTombstones();
@@ -269,40 +278,28 @@ export function reconcileClientPatients(
   incomingPatients: PatientItem[],
   isExplicitReset?: boolean,
   deletedIds?: string[],
-  lastResetAt?: string | null
+  preResetPatientIds?: string[] | null
 ): PatientItem[] {
   if (isExplicitReset) {
     return [];
   }
 
-  const resetEpoch = lastResetAt ? new Date(lastResetAt).getTime() : 0;
   const localTombstones = getLocalTombstones();
   const deletedSet = new Set([...(deletedIds || []), ...Array.from(localTombstones)]);
+  const localPreReset = getLocalPreResetPatientIds();
+  const preResetSet = new Set([...(preResetPatientIds || []), ...Array.from(localPreReset)]);
   const patientMap = new Map<string, PatientItem>();
 
-  // 1. Add current active local patients (unless deleted or expired by reset barrier)
+  // 1. Add current active local patients (unless dihapus atau memang id lama sisa reset)
   for (const p of currentPatients) {
-    if (p && p.id && !deletedSet.has(p.id)) {
-      if (resetEpoch > 0) {
-        const itemTime = new Date(p.createdAt || (p as any).registeredAt || 0).getTime();
-        if (!itemTime || itemTime <= resetEpoch) {
-          continue; // Discard patient created before or at last reset watermark
-        }
-      }
+    if (p && p.id && !deletedSet.has(p.id) && !preResetSet.has(p.id)) {
       patientMap.set(p.id, { ...p });
     }
   }
 
   // 2. Merge incoming patients
   for (const inP of incomingPatients) {
-    if (!inP || !inP.id || deletedSet.has(inP.id)) continue;
-
-    if (resetEpoch > 0) {
-      const itemTime = new Date(inP.createdAt || (inP as any).registeredAt || 0).getTime();
-      if (!itemTime || itemTime <= resetEpoch) {
-        continue; // Discard incoming patient created before or at last reset watermark
-      }
-    }
+    if (!inP || !inP.id || deletedSet.has(inP.id) || preResetSet.has(inP.id)) continue;
 
     const existing = patientMap.get(inP.id);
     if (!existing) {
@@ -372,19 +369,15 @@ export default function App() {
   const [patients, setPatients] = useState<PatientItem[]>(() => {
     try {
       const saved = localStorage.getItem('antrian_patients');
-      const lastReset = localStorage.getItem('antrian_last_reset_at');
-      const resetEpoch = lastReset ? new Date(lastReset).getTime() : 0;
+      const preResetIds = getLocalPreResetPatientIds();
       const today = getLocalDateStringWIB();
 
       const list: PatientItem[] = saved ? JSON.parse(saved) : INITIAL_PATIENTS;
       const map = new Map<string, PatientItem>();
       (list || []).forEach(p => {
         if (p && p.id) {
-          // Reject stale patient created prior to the last queue reset
-          if (resetEpoch > 0) {
-            const itemTime = new Date(p.createdAt || (p as any).registeredAt || 0).getTime();
-            if (itemTime > 0 && itemTime < resetEpoch) return;
-          }
+          // Reject id pasien yang memang sudah dihapus reset (bukan berdasarkan jam device)
+          if (preResetIds.has(p.id)) return;
           // Reject patient from a previous visit date
           if ((p as any).visitDate && (p as any).visitDate !== today) return;
           map.set(p.id, p);
@@ -885,6 +878,9 @@ export default function App() {
       }
 
       if (isResetEvent) {
+        if (Array.isArray(syncData.preResetPatientIds) && syncData.preResetPatientIds.length > 0) {
+          syncData.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
+        }
         knownPatientIdsRef.current.clear();
         clearLocalTombstones();
         hasLocalMutationRef.current = false;
@@ -954,6 +950,9 @@ export default function App() {
         if (Array.isArray(syncData.deletedPatientIds) && syncData.deletedPatientIds.length > 0) {
           syncData.deletedPatientIds.forEach((id: string) => addLocalTombstone(id));
         }
+        if (Array.isArray(syncData.preResetPatientIds) && syncData.preResetPatientIds.length > 0) {
+          syncData.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
+        }
 
         setPatients(prev => {
           const merged = reconcileClientPatients(
@@ -961,7 +960,7 @@ export default function App() {
             syncData.patients,
             false,
             syncData.deletedPatientIds,
-            syncData.lastResetAt
+            syncData.preResetPatientIds
           );
           return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged;
         });
@@ -1029,13 +1028,16 @@ export default function App() {
         updateBoxOrderWatermarkIfNewer(cloudState.boxOrderUpdatedAt);
       }
 
-      const cloudResetEpoch = cloudState.lastResetAt ? new Date(cloudState.lastResetAt).getTime() : 0;
+      if (Array.isArray(cloudState.preResetPatientIds) && cloudState.preResetPatientIds.length > 0) {
+        cloudState.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
+      }
+      const cloudPreResetIds = new Set([
+        ...(cloudState.preResetPatientIds || []),
+        ...Array.from(getLocalPreResetPatientIds()),
+      ]);
       const validCloudPatients = (cloudState.patients || []).filter(p => {
         if (!p || !p.id) return false;
-        if (cloudResetEpoch > 0) {
-          const itemTime = new Date(p.createdAt || (p as any).registeredAt || 0).getTime();
-          if (itemTime > 0 && itemTime < cloudResetEpoch) return false;
-        }
+        if (cloudPreResetIds.has(p.id)) return false;
         return true;
       });
 
@@ -1066,6 +1068,9 @@ export default function App() {
       );
 
       if (isCloudExplicitReset) {
+        if (Array.isArray(cloudState.preResetPatientIds) && cloudState.preResetPatientIds.length > 0) {
+          cloudState.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
+        }
         knownPatientIdsRef.current.clear();
         setPatients([]);
         setCallLogs([]);
@@ -1090,7 +1095,7 @@ export default function App() {
             validCloudPatients,
             false,
             cloudState.deletedPatientIds,
-            cloudState.lastResetAt
+            cloudState.preResetPatientIds
           );
           merged.forEach(p => knownPatientIdsRef.current.add(p.id));
           return merged;
@@ -1161,13 +1166,16 @@ export default function App() {
             }
           }
 
-          const serverResetEpoch = data.state.lastResetAt ? new Date(data.state.lastResetAt).getTime() : 0;
+          if (Array.isArray(data.state.preResetPatientIds) && data.state.preResetPatientIds.length > 0) {
+            data.state.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
+          }
+          const serverPreResetIds = new Set([
+            ...(data.state.preResetPatientIds || []),
+            ...Array.from(getLocalPreResetPatientIds()),
+          ]);
           const validServerPatients = (data.state.patients || []).filter((p: PatientItem) => {
             if (!p || !p.id) return false;
-            if (serverResetEpoch > 0) {
-              const itemTime = new Date(p.createdAt || (p as any).registeredAt || 0).getTime();
-              if (itemTime > 0 && itemTime < serverResetEpoch) return false;
-            }
+            if (serverPreResetIds.has(p.id)) return false;
             return true;
           });
 
@@ -1192,6 +1200,9 @@ export default function App() {
           );
 
           if (isServerReset) {
+            if (Array.isArray(data.state.preResetPatientIds) && data.state.preResetPatientIds.length > 0) {
+              data.state.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
+            }
             knownPatientIdsRef.current.clear();
             setPatients([]);
             setCallLogs([]);

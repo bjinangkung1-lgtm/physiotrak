@@ -20,6 +20,7 @@ export interface SyncDataState {
   _senderDeviceId?: string;
   senderDeviceId?: string;
   deletedPatientIds?: string[];
+  preResetPatientIds?: string[];
   deletedBoxIds?: string[];
   deletedRanapIds?: string[];
   isExplicitReset?: boolean;
