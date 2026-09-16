@@ -1546,14 +1546,38 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                           <ArrowRightLeft className="w-3.5 h-3.5 text-teal-700" />
                         </button>
 
-                        <button
-                          type="button"
-                          onClick={() => onDeletePatient(patient.id)}
-                          className="p-1 text-rose-600 bg-rose-50/60 hover:bg-rose-100 border border-rose-200/60 hover:border-rose-300 rounded-md transition-colors cursor-pointer"
-                          title="Hapus Pasien Dari Antrean"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                        </button>
+                        {confirmDeletePatientId === patient.id ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConfirmDeletePatientId(null);
+                                onDeletePatient(patient.id);
+                              }}
+                              className="px-1.5 py-1 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-md transition-colors cursor-pointer"
+                              title="Konfirmasi hapus pasien ini"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeletePatientId(null)}
+                              className="p-1 text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-md transition-colors cursor-pointer"
+                              title="Batal"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeletePatientId(patient.id)}
+                            className="p-1 text-rose-600 bg-rose-50/60 hover:bg-rose-100 border border-rose-200/60 hover:border-rose-300 rounded-md transition-colors cursor-pointer"
+                            title="Hapus Pasien Dari Antrean"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1702,13 +1726,35 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                         </button>
                       )}
 
-                      <button
-                        onClick={() => onDeletePatient(patient.id)}
-                        className="text-slate-300 hover:text-rose-600 transition-colors p-1 cursor-pointer"
-                        title="Hapus"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {confirmDeletePatientId === patient.id ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setConfirmDeletePatientId(null);
+                              onDeletePatient(patient.id);
+                            }}
+                            className="text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 transition-colors p-1 rounded-md cursor-pointer"
+                            title="Konfirmasi hapus pasien ini"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeletePatientId(null)}
+                            className="text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors p-1 rounded-md cursor-pointer"
+                            title="Batal"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeletePatientId(patient.id)}
+                          className="text-slate-300 hover:text-rose-600 transition-colors p-1 cursor-pointer"
+                          title="Hapus"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
