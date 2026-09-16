@@ -1634,23 +1634,18 @@ function scheduleFirestoreQuotaRetry() {
     try { fs.unlinkSync(FIRESTORE_QUOTA_FLAG_FILE); } catch {}
     console.log('[FirestoreMirror] Jeda kuota selesai, mencoba mencadangkan ke Cloud Firestore lagi secara otomatis.');
 
-    // PENTING: langsung coba kirim ulang state TERBARU yang sempat gagal
-    // dicadangkan selama jeda kuota tadi, jangan cuma menunggu perubahan
-    // berikutnya (yang mungkin tidak pernah terjadi kalau device sudah
-    // dimatikan). Tanpa ini, state yang tertunda tetap tidak pernah sampai
-    // ke Firestore sampai ada aksi baru - dan kalau server restart sebelum
-    // itu terjadi, ia akan memulihkan versi LAMA dari Firestore.
-    if (pendingMirrorState) {
-      try {
-        const sanitized = JSON.parse(JSON.stringify(pendingMirrorState));
-        await setDoc(QUEUE_STATE_DOC_REF, {
-          ...sanitized,
-          lastMirroredAt: new Date().toISOString(),
-        });
-        console.log('[FirestoreMirror] Berhasil mengirim ulang state yang tertunda setelah jeda kuota berakhir.');
-      } catch (err: any) {
-        handleFirestoreQuotaError(err, 'FirestoreMirror-Retry');
-      }
+    // PENTING: langsung coba kirim ulang SEMUA data tertunda (antrean, arsip harian,
+    // database pasien, riwayat ranap) yang sempat gagal dicadangkan selama jeda kuota
+    // tadi, jangan cuma menunggu perubahan berikutnya (yang mungkin tidak pernah terjadi
+    // kalau device sudah dimatikan). Tanpa ini, data yang tertunda tetap tidak pernah
+    // sampai ke Firestore sampai ada aksi baru - dan kalau server restart sebelum itu
+    // terjadi, ia akan memulihkan versi LAMA dari Firestore (persis gejala jumlah
+    // kunjungan/pasien hari itu yang tiba-tiba menyusut drastis setelah restart).
+    try {
+      await flushPendingFirestoreMirrors();
+      console.log('[FirestoreMirror] Berhasil mengirim ulang data yang tertunda setelah jeda kuota berakhir.');
+    } catch (err: any) {
+      handleFirestoreQuotaError(err, 'FirestoreMirror-Retry');
     }
   }, FIRESTORE_QUOTA_COOLDOWN_MS);
 }
@@ -1736,8 +1731,13 @@ const dailyArchiveMirrorDebounceTimers = new Map<string, NodeJS.Timeout>();
 const pendingDailyArchiveMirrors = new Map<string, Record<string, any[]>>();
 
 async function mirrorArchiveMonthToFirestore(monthKey: string, data: Record<string, any[]>): Promise<void> {
-  if (isFirestoreMirrorDisabled) return;
+  // PENTING: catat dulu data TERBARU yang ingin dicadangkan, SEBELUM memeriksa apakah
+  // mirroring sedang dijeda karena kuota habis. Urutan yang salah (cek dulu, baru catat)
+  // membuat penulisan arsip yang terjadi PERSIS selama jeda kuota hilang sepenuhnya -
+  // tidak pernah dicoba lagi walau jedanya sudah selesai - persis gejala jumlah kunjungan
+  // hari itu yang tiba-tiba menyusut drastis setelah server sempat restart.
   pendingDailyArchiveMirrors.set(monthKey, data);
+  if (isFirestoreMirrorDisabled) return;
   const existingTimer = dailyArchiveMirrorDebounceTimers.get(monthKey);
   if (existingTimer) clearTimeout(existingTimer);
   const timer = setTimeout(async () => {
@@ -1810,8 +1810,10 @@ let masterPatientsMirrorDebounceTimer: NodeJS.Timeout | null = null;
 let pendingMasterPatientsMirror: any[] | null = null;
 
 async function mirrorMasterPatientsToFirestore(patients: any[]): Promise<void> {
-  if (isFirestoreMirrorDisabled) return;
+  // Catat dulu data TERBARU sebelum memeriksa jeda kuota - lihat komentar di
+  // mirrorArchiveMonthToFirestore untuk alasannya.
   pendingMasterPatientsMirror = patients;
+  if (isFirestoreMirrorDisabled) return;
   if (masterPatientsMirrorDebounceTimer) clearTimeout(masterPatientsMirrorDebounceTimer);
   masterPatientsMirrorDebounceTimer = setTimeout(async () => {
     masterPatientsMirrorDebounceTimer = null;
@@ -1852,8 +1854,10 @@ let ranapHistoryMirrorDebounceTimer: NodeJS.Timeout | null = null;
 let pendingRanapHistoryMirror: any[] | null = null;
 
 async function mirrorRanapHistoryToFirestore(history: any[]): Promise<void> {
-  if (isFirestoreMirrorDisabled) return;
+  // Catat dulu data TERBARU sebelum memeriksa jeda kuota - lihat komentar di
+  // mirrorArchiveMonthToFirestore untuk alasannya.
   pendingRanapHistoryMirror = history;
+  if (isFirestoreMirrorDisabled) return;
   if (ranapHistoryMirrorDebounceTimer) clearTimeout(ranapHistoryMirrorDebounceTimer);
   ranapHistoryMirrorDebounceTimer = setTimeout(async () => {
     ranapHistoryMirrorDebounceTimer = null;
@@ -3879,49 +3883,58 @@ app.get('/api/events', (req, res) => {
 });
 
 async function flushPendingFirestoreMirrors(): Promise<void> {
+  // PENTING: cek data pending LANGSUNG (bukan lewat ada-tidaknya timer debounce). Saat
+  // mirroring baru saja aktif kembali setelah jeda kuota, data terbaru sudah tercatat di
+  // pendingX sejak PERTAMA kali ditulis (lihat mirrorArchiveMonthToFirestore dkk.), tapi
+  // TIDAK PERNAH menjadwalkan timer selama masih dijeda - kalau flush ini hanya memeriksa
+  // timer, data yang tertunda dari masa jeda kuota tetap tidak pernah terkirim.
   const tasks: Promise<any>[] = [];
 
   if (mirrorDebounceTimer) {
     clearTimeout(mirrorDebounceTimer);
     mirrorDebounceTimer = null;
-    if (pendingMirrorState && !isFirestoreMirrorDisabled) {
-      tasks.push(setDoc(QUEUE_STATE_DOC_REF, {
-        ...JSON.parse(JSON.stringify(pendingMirrorState)),
-        lastMirroredAt: new Date().toISOString(),
-      }).catch((err) => console.warn('[Shutdown] Gagal flush queue state mirror:', err)));
-    }
   }
-  for (const [monthKey, timer] of dailyArchiveMirrorDebounceTimers) {
+  if (pendingMirrorState && !isFirestoreMirrorDisabled) {
+    tasks.push(setDoc(QUEUE_STATE_DOC_REF, {
+      ...JSON.parse(JSON.stringify(pendingMirrorState)),
+      lastMirroredAt: new Date().toISOString(),
+    }).catch((err) => console.warn('[Shutdown] Gagal flush queue state mirror:', err)));
+  }
+
+  for (const timer of dailyArchiveMirrorDebounceTimers.values()) {
     clearTimeout(timer);
-    dailyArchiveMirrorDebounceTimers.delete(monthKey);
-    const pending = pendingDailyArchiveMirrors.get(monthKey);
-    pendingDailyArchiveMirrors.delete(monthKey);
-    if (pending && !isFirestoreMirrorDisabled) {
+  }
+  dailyArchiveMirrorDebounceTimers.clear();
+  if (!isFirestoreMirrorDisabled) {
+    for (const [monthKey, pending] of pendingDailyArchiveMirrors) {
       tasks.push(setDoc(dailyArchiveMonthDocRef(monthKey), {
         archive: JSON.parse(JSON.stringify(pending)),
         lastMirroredAt: new Date().toISOString(),
       }).catch((err) => console.warn(`[Shutdown] Gagal flush daily archive mirror (${monthKey}):`, err)));
     }
   }
+  pendingDailyArchiveMirrors.clear();
+
   if (masterPatientsMirrorDebounceTimer) {
     clearTimeout(masterPatientsMirrorDebounceTimer);
     masterPatientsMirrorDebounceTimer = null;
-    if (pendingMasterPatientsMirror && !isFirestoreMirrorDisabled) {
-      tasks.push(setDoc(MASTER_PATIENTS_DOC_REF, {
-        patients: JSON.parse(JSON.stringify(pendingMasterPatientsMirror)),
-        lastMirroredAt: new Date().toISOString(),
-      }).catch((err) => console.warn('[Shutdown] Gagal flush master patients mirror:', err)));
-    }
   }
+  if (pendingMasterPatientsMirror && !isFirestoreMirrorDisabled) {
+    tasks.push(setDoc(MASTER_PATIENTS_DOC_REF, {
+      patients: JSON.parse(JSON.stringify(pendingMasterPatientsMirror)),
+      lastMirroredAt: new Date().toISOString(),
+    }).catch((err) => console.warn('[Shutdown] Gagal flush master patients mirror:', err)));
+  }
+
   if (ranapHistoryMirrorDebounceTimer) {
     clearTimeout(ranapHistoryMirrorDebounceTimer);
     ranapHistoryMirrorDebounceTimer = null;
-    if (pendingRanapHistoryMirror && !isFirestoreMirrorDisabled) {
-      tasks.push(setDoc(RANAP_HISTORY_DOC_REF, {
-        history: JSON.parse(JSON.stringify(pendingRanapHistoryMirror)),
-        lastMirroredAt: new Date().toISOString(),
-      }).catch((err) => console.warn('[Shutdown] Gagal flush ranap history mirror:', err)));
-    }
+  }
+  if (pendingRanapHistoryMirror && !isFirestoreMirrorDisabled) {
+    tasks.push(setDoc(RANAP_HISTORY_DOC_REF, {
+      history: JSON.parse(JSON.stringify(pendingRanapHistoryMirror)),
+      lastMirroredAt: new Date().toISOString(),
+    }).catch((err) => console.warn('[Shutdown] Gagal flush ranap history mirror:', err)));
   }
 
   if (tasks.length > 0) {
