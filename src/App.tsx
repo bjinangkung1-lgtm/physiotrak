@@ -24,6 +24,7 @@ import { ResponseTimeAnalyticsModal } from './components/ResponseTimeAnalyticsMo
 import { LainLainModal } from './components/LainLainModal';
 import { InventoryStockModal } from './components/InventoryStockModal';
 import { ResetConfirmPinModal } from './components/ResetConfirmPinModal';
+import { DeletePatientPasswordModal } from './components/DeletePatientPasswordModal';
 import { SopModal } from './components/SopModal';
 import { TherapistSidebar } from './components/TherapistSidebar';
 import { TherapistMobileBar } from './components/TherapistMobileBar';
@@ -1974,6 +1975,15 @@ export default function App() {
     setPatients(prev => prev.filter(p => p.id !== patientId));
   };
 
+  // Meminta konfirmasi password sebelum benar-benar menghapus pasien (mencegah
+  // hapus tidak sengaja/tanpa otorisasi). handleDeletePatient di atas baru
+  // dipanggil setelah password diverifikasi benar oleh DeletePatientPasswordModal.
+  const [pendingDeletePatient, setPendingDeletePatient] = useState<PatientItem | null>(null);
+  const handleRequestDeletePatient = (patientId: string) => {
+    const target = patients.find(p => p.id === patientId) || null;
+    setPendingDeletePatient(target);
+  };
+
 
   // Update Patient Details
   const handleUpdatePatient = (updatedPatient: PatientItem) => {
@@ -2736,7 +2746,7 @@ export default function App() {
                             onUpdateBoxImages={handleUpdateBoxImages}
                             onDeleteBox={handleDeleteBox}
                             onClearBoxPatients={handleClearBoxPatients}
-                            onDeletePatient={handleDeletePatient}
+                            onDeletePatient={handleRequestDeletePatient}
                             onUpdatePatient={handleUpdatePatient}
                             onEditBox={(b) => setEditingBox(b)}
                             onOpenPatientQR={(p, b) => {
@@ -2835,7 +2845,7 @@ export default function App() {
                         onUpdateBoxImages={handleUpdateBoxImages}
                         onDeleteBox={handleDeleteBox}
                         onClearBoxPatients={handleClearBoxPatients}
-                        onDeletePatient={handleDeletePatient}
+                        onDeletePatient={handleRequestDeletePatient}
                         onUpdatePatient={handleUpdatePatient}
                         onEditBox={(b) => setEditingBox(b)}
                         onOpenPatientQR={(p, b) => {
@@ -3071,6 +3081,17 @@ export default function App() {
         onConfirmReset={() => executeResetAllData()}
         boxes={boxes}
         patients={patients}
+      />
+
+      <DeletePatientPasswordModal
+        isOpen={!!pendingDeletePatient}
+        onClose={() => setPendingDeletePatient(null)}
+        onConfirmDelete={() => {
+          if (pendingDeletePatient) {
+            handleDeletePatient(pendingDeletePatient.id);
+          }
+        }}
+        patientName={pendingDeletePatient?.patientName}
       />
 
       {/* Floating System Toast */}
