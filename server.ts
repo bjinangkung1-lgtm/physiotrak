@@ -1614,6 +1614,7 @@ let isFirestoreMirrorDisabled = (() => {
   return false;
 })();
 let mirrorDebounceTimer: NodeJS.Timeout | null = null;
+let mirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingMirrorState: any = null;
 
 // Timer untuk menyalakan kembali mirroring secara OTOMATIS setelah jeda di
@@ -1673,6 +1674,31 @@ function handleFirestoreQuotaError(err: any, label: string): boolean {
   return isQuotaError;
 }
 
+async function flushQueueStateMirrorNow(): Promise<void> {
+  if (mirrorDebounceTimer) {
+    clearTimeout(mirrorDebounceTimer);
+    mirrorDebounceTimer = null;
+  }
+  if (mirrorMaxWaitTimer) {
+    clearTimeout(mirrorMaxWaitTimer);
+    mirrorMaxWaitTimer = null;
+  }
+  if (isFirestoreMirrorDisabled) return;
+
+  const currentState = pendingMirrorState;
+  if (!currentState) return;
+
+  try {
+    const sanitized = JSON.parse(JSON.stringify(currentState));
+    await setDoc(QUEUE_STATE_DOC_REF, {
+      ...sanitized,
+      lastMirroredAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    handleFirestoreQuotaError(err, 'FirestoreMirror');
+  }
+}
+
 async function mirrorStateToFirestore(state: any): Promise<void> {
   // PENTING: selalu catat state TERBARU yang ingin dicadangkan, walau kuota
   // sedang dalam masa jeda. Sebelumnya fungsi ini keluar duluan tanpa
@@ -1692,28 +1718,25 @@ async function mirrorStateToFirestore(state: any): Promise<void> {
     return;
   }
 
+  // Debounce writes by 5s to batch rapid changes and minimize write units.
   if (mirrorDebounceTimer) {
     clearTimeout(mirrorDebounceTimer);
   }
+  mirrorDebounceTimer = setTimeout(() => { void flushQueueStateMirrorNow(); }, 5000);
 
-  // Debounce writes by 5s to batch rapid changes and minimize write units
-  mirrorDebounceTimer = setTimeout(async () => {
-    mirrorDebounceTimer = null;
-    if (isFirestoreMirrorDisabled) return;
-
-    const currentState = pendingMirrorState;
-    if (!currentState) return;
-
-    try {
-      const sanitized = JSON.parse(JSON.stringify(currentState));
-      await setDoc(QUEUE_STATE_DOC_REF, {
-        ...sanitized,
-        lastMirroredAt: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      handleFirestoreQuotaError(err, 'FirestoreMirror');
-    }
-  }, 5000);
+  // PENTING: debounce di atas RESET ulang setiap kali ada perubahan baru - di klinik
+  // yang sibuk (pasien datang/dipanggil/diceklis tiap beberapa detik terus-menerus),
+  // timer itu bisa TIDAK PERNAH benar-benar menyala selama aktivitas tidak berhenti,
+  // sehingga cadangan Firestore-nya jadi jauh lebih basi dari 5 detik (bisa
+  // berpuluh menit). Kalau instance server sempat di-restart/di-recycle oleh
+  // platform hosting PERSIS di jendela itu, semua aktivitas sejak cadangan
+  // terakhir hilang saat dipulihkan dari Firestore - persis gejala "sebagian nama
+  // pasien hilang, tersebar di beberapa kotak" yang dilaporkan. Timer kedua ini
+  // menjamin ada penulisan paling lambat 5 detik sejak perubahan PERTAMA yang
+  // belum tercadangkan, walau perubahan baru terus mengalir tanpa jeda.
+  if (!mirrorMaxWaitTimer) {
+    mirrorMaxWaitTimer = setTimeout(() => { void flushQueueStateMirrorNow(); }, 5000);
+  }
 }
 
 // Mirror & Hydrate for Daily Archive (Laporan Harian & Bulanan per Terapis)
@@ -1728,32 +1751,47 @@ function dailyArchiveMonthDocRef(monthKey: string) {
 }
 
 const dailyArchiveMirrorDebounceTimers = new Map<string, NodeJS.Timeout>();
+const dailyArchiveMirrorMaxWaitTimers = new Map<string, NodeJS.Timeout>();
 const pendingDailyArchiveMirrors = new Map<string, Record<string, any[]>>();
+
+async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
+  const existingTimer = dailyArchiveMirrorDebounceTimers.get(monthKey);
+  if (existingTimer) clearTimeout(existingTimer);
+  dailyArchiveMirrorDebounceTimers.delete(monthKey);
+  const maxWaitTimer = dailyArchiveMirrorMaxWaitTimers.get(monthKey);
+  if (maxWaitTimer) clearTimeout(maxWaitTimer);
+  dailyArchiveMirrorMaxWaitTimers.delete(monthKey);
+
+  if (isFirestoreMirrorDisabled) return;
+  const current = pendingDailyArchiveMirrors.get(monthKey);
+  pendingDailyArchiveMirrors.delete(monthKey);
+  if (!current) return;
+  try {
+    const sanitized = JSON.parse(JSON.stringify(current));
+    await setDoc(dailyArchiveMonthDocRef(monthKey), { archive: sanitized, lastMirroredAt: new Date().toISOString() });
+  } catch (err: any) {
+    handleFirestoreQuotaError(err, 'DailyArchiveMirror');
+  }
+}
 
 async function mirrorArchiveMonthToFirestore(monthKey: string, data: Record<string, any[]>): Promise<void> {
   // PENTING: catat dulu data TERBARU yang ingin dicadangkan, SEBELUM memeriksa apakah
   // mirroring sedang dijeda karena kuota habis. Urutan yang salah (cek dulu, baru catat)
-  // membuat penulisan arsip yang terjadi PERSIS selama jeda kuota hilang sepenuhnya -
+  // membuat penulisan arsip yang terjadi PERSIS selama jeda kuota habis hilang sepenuhnya -
   // tidak pernah dicoba lagi walau jedanya sudah selesai - persis gejala jumlah kunjungan
   // hari itu yang tiba-tiba menyusut drastis setelah server sempat restart.
   pendingDailyArchiveMirrors.set(monthKey, data);
   if (isFirestoreMirrorDisabled) return;
   const existingTimer = dailyArchiveMirrorDebounceTimers.get(monthKey);
   if (existingTimer) clearTimeout(existingTimer);
-  const timer = setTimeout(async () => {
-    dailyArchiveMirrorDebounceTimers.delete(monthKey);
-    if (isFirestoreMirrorDisabled) return;
-    const current = pendingDailyArchiveMirrors.get(monthKey);
-    pendingDailyArchiveMirrors.delete(monthKey);
-    if (!current) return;
-    try {
-      const sanitized = JSON.parse(JSON.stringify(current));
-      await setDoc(dailyArchiveMonthDocRef(monthKey), { archive: sanitized, lastMirroredAt: new Date().toISOString() });
-    } catch (err: any) {
-      handleFirestoreQuotaError(err, 'DailyArchiveMirror');
-    }
-  }, 5000);
-  dailyArchiveMirrorDebounceTimers.set(monthKey, timer);
+  dailyArchiveMirrorDebounceTimers.set(monthKey, setTimeout(() => { void flushArchiveMonthMirrorNow(monthKey); }, 5000));
+
+  // Jamin penulisan paling lambat 5 detik sejak perubahan pertama yang belum
+  // tercadangkan untuk bulan ini, walau perubahan baru terus mengalir tanpa jeda
+  // (lihat komentar di mirrorStateToFirestore untuk alasan lengkapnya).
+  if (!dailyArchiveMirrorMaxWaitTimers.has(monthKey)) {
+    dailyArchiveMirrorMaxWaitTimers.set(monthKey, setTimeout(() => { void flushArchiveMonthMirrorNow(monthKey); }, 5000));
+  }
 }
 
 async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
@@ -1807,7 +1845,28 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
 
 // Mirror & Hydrate for Master Patients (Database Pasien)
 let masterPatientsMirrorDebounceTimer: NodeJS.Timeout | null = null;
+let masterPatientsMirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingMasterPatientsMirror: any[] | null = null;
+
+async function flushMasterPatientsMirrorNow(): Promise<void> {
+  if (masterPatientsMirrorDebounceTimer) {
+    clearTimeout(masterPatientsMirrorDebounceTimer);
+    masterPatientsMirrorDebounceTimer = null;
+  }
+  if (masterPatientsMirrorMaxWaitTimer) {
+    clearTimeout(masterPatientsMirrorMaxWaitTimer);
+    masterPatientsMirrorMaxWaitTimer = null;
+  }
+  if (isFirestoreMirrorDisabled) return;
+  const current = pendingMasterPatientsMirror;
+  if (!current) return;
+  try {
+    const sanitized = JSON.parse(JSON.stringify(current));
+    await setDoc(MASTER_PATIENTS_DOC_REF, { patients: sanitized, lastMirroredAt: new Date().toISOString() });
+  } catch (err: any) {
+    handleFirestoreQuotaError(err, 'MasterPatientsMirror');
+  }
+}
 
 async function mirrorMasterPatientsToFirestore(patients: any[]): Promise<void> {
   // Catat dulu data TERBARU sebelum memeriksa jeda kuota - lihat komentar di
@@ -1815,18 +1874,13 @@ async function mirrorMasterPatientsToFirestore(patients: any[]): Promise<void> {
   pendingMasterPatientsMirror = patients;
   if (isFirestoreMirrorDisabled) return;
   if (masterPatientsMirrorDebounceTimer) clearTimeout(masterPatientsMirrorDebounceTimer);
-  masterPatientsMirrorDebounceTimer = setTimeout(async () => {
-    masterPatientsMirrorDebounceTimer = null;
-    if (isFirestoreMirrorDisabled) return;
-    const current = pendingMasterPatientsMirror;
-    if (!current) return;
-    try {
-      const sanitized = JSON.parse(JSON.stringify(current));
-      await setDoc(MASTER_PATIENTS_DOC_REF, { patients: sanitized, lastMirroredAt: new Date().toISOString() });
-    } catch (err: any) {
-      handleFirestoreQuotaError(err, 'MasterPatientsMirror');
-    }
-  }, 5000);
+  masterPatientsMirrorDebounceTimer = setTimeout(() => { void flushMasterPatientsMirrorNow(); }, 5000);
+
+  // Jamin penulisan paling lambat 5 detik sejak perubahan pertama yang belum
+  // tercadangkan (lihat komentar di mirrorStateToFirestore untuk alasan lengkapnya).
+  if (!masterPatientsMirrorMaxWaitTimer) {
+    masterPatientsMirrorMaxWaitTimer = setTimeout(() => { void flushMasterPatientsMirrorNow(); }, 5000);
+  }
 }
 
 async function hydrateMasterPatientsFromFirestoreIfNeeded(): Promise<void> {
@@ -1851,7 +1905,28 @@ async function hydrateMasterPatientsFromFirestoreIfNeeded(): Promise<void> {
 
 // Mirror & Hydrate for Ranap History (Riwayat Antrean Rawat Inap)
 let ranapHistoryMirrorDebounceTimer: NodeJS.Timeout | null = null;
+let ranapHistoryMirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingRanapHistoryMirror: any[] | null = null;
+
+async function flushRanapHistoryMirrorNow(): Promise<void> {
+  if (ranapHistoryMirrorDebounceTimer) {
+    clearTimeout(ranapHistoryMirrorDebounceTimer);
+    ranapHistoryMirrorDebounceTimer = null;
+  }
+  if (ranapHistoryMirrorMaxWaitTimer) {
+    clearTimeout(ranapHistoryMirrorMaxWaitTimer);
+    ranapHistoryMirrorMaxWaitTimer = null;
+  }
+  if (isFirestoreMirrorDisabled) return;
+  const current = pendingRanapHistoryMirror;
+  if (!current) return;
+  try {
+    const sanitized = JSON.parse(JSON.stringify(current));
+    await setDoc(RANAP_HISTORY_DOC_REF, { history: sanitized, lastMirroredAt: new Date().toISOString() });
+  } catch (err: any) {
+    handleFirestoreQuotaError(err, 'RanapHistoryMirror');
+  }
+}
 
 async function mirrorRanapHistoryToFirestore(history: any[]): Promise<void> {
   // Catat dulu data TERBARU sebelum memeriksa jeda kuota - lihat komentar di
@@ -1859,18 +1934,13 @@ async function mirrorRanapHistoryToFirestore(history: any[]): Promise<void> {
   pendingRanapHistoryMirror = history;
   if (isFirestoreMirrorDisabled) return;
   if (ranapHistoryMirrorDebounceTimer) clearTimeout(ranapHistoryMirrorDebounceTimer);
-  ranapHistoryMirrorDebounceTimer = setTimeout(async () => {
-    ranapHistoryMirrorDebounceTimer = null;
-    if (isFirestoreMirrorDisabled) return;
-    const current = pendingRanapHistoryMirror;
-    if (!current) return;
-    try {
-      const sanitized = JSON.parse(JSON.stringify(current));
-      await setDoc(RANAP_HISTORY_DOC_REF, { history: sanitized, lastMirroredAt: new Date().toISOString() });
-    } catch (err: any) {
-      handleFirestoreQuotaError(err, 'RanapHistoryMirror');
-    }
-  }, 5000);
+  ranapHistoryMirrorDebounceTimer = setTimeout(() => { void flushRanapHistoryMirrorNow(); }, 5000);
+
+  // Jamin penulisan paling lambat 5 detik sejak perubahan pertama yang belum
+  // tercadangkan (lihat komentar di mirrorStateToFirestore untuk alasan lengkapnya).
+  if (!ranapHistoryMirrorMaxWaitTimer) {
+    ranapHistoryMirrorMaxWaitTimer = setTimeout(() => { void flushRanapHistoryMirrorNow(); }, 5000);
+  }
 }
 
 async function hydrateRanapHistoryFromFirestoreIfNeeded(): Promise<void> {
@@ -3887,54 +3957,38 @@ async function flushPendingFirestoreMirrors(): Promise<void> {
   // mirroring baru saja aktif kembali setelah jeda kuota, data terbaru sudah tercatat di
   // pendingX sejak PERTAMA kali ditulis (lihat mirrorArchiveMonthToFirestore dkk.), tapi
   // TIDAK PERNAH menjadwalkan timer selama masih dijeda - kalau flush ini hanya memeriksa
-  // timer, data yang tertunda dari masa jeda kuota tetap tidak pernah terkirim.
+  // timer, data yang tertunda dari masa jeda kuota tetap tidak pernah terkirim. Delegasikan
+  // ke masing-masing fungsi flush-now supaya timer debounce MAUPUN timer jaminan-maksimal
+  // (maxWait) keduanya ikut dibersihkan dengan benar di satu tempat.
   const tasks: Promise<any>[] = [];
 
-  if (mirrorDebounceTimer) {
-    clearTimeout(mirrorDebounceTimer);
-    mirrorDebounceTimer = null;
-  }
-  if (pendingMirrorState && !isFirestoreMirrorDisabled) {
-    tasks.push(setDoc(QUEUE_STATE_DOC_REF, {
-      ...JSON.parse(JSON.stringify(pendingMirrorState)),
-      lastMirroredAt: new Date().toISOString(),
-    }).catch((err) => console.warn('[Shutdown] Gagal flush queue state mirror:', err)));
+  if (pendingMirrorState) {
+    tasks.push(flushQueueStateMirrorNow());
+  } else if (mirrorDebounceTimer || mirrorMaxWaitTimer) {
+    if (mirrorDebounceTimer) { clearTimeout(mirrorDebounceTimer); mirrorDebounceTimer = null; }
+    if (mirrorMaxWaitTimer) { clearTimeout(mirrorMaxWaitTimer); mirrorMaxWaitTimer = null; }
   }
 
-  for (const timer of dailyArchiveMirrorDebounceTimers.values()) {
-    clearTimeout(timer);
+  for (const monthKey of Array.from(pendingDailyArchiveMirrors.keys())) {
+    tasks.push(flushArchiveMonthMirrorNow(monthKey));
   }
+  for (const timer of dailyArchiveMirrorDebounceTimers.values()) clearTimeout(timer);
   dailyArchiveMirrorDebounceTimers.clear();
-  if (!isFirestoreMirrorDisabled) {
-    for (const [monthKey, pending] of pendingDailyArchiveMirrors) {
-      tasks.push(setDoc(dailyArchiveMonthDocRef(monthKey), {
-        archive: JSON.parse(JSON.stringify(pending)),
-        lastMirroredAt: new Date().toISOString(),
-      }).catch((err) => console.warn(`[Shutdown] Gagal flush daily archive mirror (${monthKey}):`, err)));
-    }
-  }
-  pendingDailyArchiveMirrors.clear();
+  for (const timer of dailyArchiveMirrorMaxWaitTimers.values()) clearTimeout(timer);
+  dailyArchiveMirrorMaxWaitTimers.clear();
 
-  if (masterPatientsMirrorDebounceTimer) {
-    clearTimeout(masterPatientsMirrorDebounceTimer);
-    masterPatientsMirrorDebounceTimer = null;
-  }
-  if (pendingMasterPatientsMirror && !isFirestoreMirrorDisabled) {
-    tasks.push(setDoc(MASTER_PATIENTS_DOC_REF, {
-      patients: JSON.parse(JSON.stringify(pendingMasterPatientsMirror)),
-      lastMirroredAt: new Date().toISOString(),
-    }).catch((err) => console.warn('[Shutdown] Gagal flush master patients mirror:', err)));
+  if (pendingMasterPatientsMirror) {
+    tasks.push(flushMasterPatientsMirrorNow());
+  } else if (masterPatientsMirrorDebounceTimer || masterPatientsMirrorMaxWaitTimer) {
+    if (masterPatientsMirrorDebounceTimer) { clearTimeout(masterPatientsMirrorDebounceTimer); masterPatientsMirrorDebounceTimer = null; }
+    if (masterPatientsMirrorMaxWaitTimer) { clearTimeout(masterPatientsMirrorMaxWaitTimer); masterPatientsMirrorMaxWaitTimer = null; }
   }
 
-  if (ranapHistoryMirrorDebounceTimer) {
-    clearTimeout(ranapHistoryMirrorDebounceTimer);
-    ranapHistoryMirrorDebounceTimer = null;
-  }
-  if (pendingRanapHistoryMirror && !isFirestoreMirrorDisabled) {
-    tasks.push(setDoc(RANAP_HISTORY_DOC_REF, {
-      history: JSON.parse(JSON.stringify(pendingRanapHistoryMirror)),
-      lastMirroredAt: new Date().toISOString(),
-    }).catch((err) => console.warn('[Shutdown] Gagal flush ranap history mirror:', err)));
+  if (pendingRanapHistoryMirror) {
+    tasks.push(flushRanapHistoryMirrorNow());
+  } else if (ranapHistoryMirrorDebounceTimer || ranapHistoryMirrorMaxWaitTimer) {
+    if (ranapHistoryMirrorDebounceTimer) { clearTimeout(ranapHistoryMirrorDebounceTimer); ranapHistoryMirrorDebounceTimer = null; }
+    if (ranapHistoryMirrorMaxWaitTimer) { clearTimeout(ranapHistoryMirrorMaxWaitTimer); ranapHistoryMirrorMaxWaitTimer = null; }
   }
 
   if (tasks.length > 0) {
