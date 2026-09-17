@@ -19,7 +19,8 @@ import {
   Package,
   Boxes,
   BookOpen,
-  BedDouble
+  BedDouble,
+  Undo2
 } from 'lucide-react';
 
 interface TherapistSidebarProps {
@@ -34,6 +35,7 @@ interface TherapistSidebarProps {
   onAddPatientToBox?: (boxId: string) => void;
   onScrollToBox?: (boxId: string) => void;
   onOpenDailyDatabase?: () => void;
+  onOpenRestoreQueue?: () => void;
   onOpenReport?: () => void;
   onOpenMonthlyReport?: () => void;
   onOpenResponseTimeAnalytics?: () => void;
@@ -53,6 +55,7 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
   patients = [],
   ranapQueue = [],
   onOpenDailyDatabase,
+  onOpenRestoreQueue,
   onOpenReport,
   onOpenMonthlyReport,
   onOpenResponseTimeAnalytics,
@@ -183,7 +186,29 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
             </button>
           )}
 
-
+          {/* 2. Restore Antrean - pulihkan pasien yang hilang tanpa sebab */}
+          {onOpenRestoreQueue && (
+            <button
+              onClick={() => handleActionClick(onOpenRestoreQueue)}
+              id="sidebar-menu-restore-queue"
+              className="w-full p-3 rounded-2xl bg-amber-50/70 hover:bg-amber-100/90 text-left transition-all border border-amber-200/90 flex items-center justify-between gap-3 group cursor-pointer shadow-2xs hover:shadow-sm"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-amber-600 text-white flex items-center justify-center shadow-xs shrink-0 group-hover:scale-105 transition-transform">
+                  <Undo2 className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <span className="text-xs font-black text-slate-900 group-hover:text-amber-900 truncate block">
+                    Restore Antrean
+                  </span>
+                  <p className="text-[11px] text-slate-600 font-medium truncate mt-0.5">
+                    Cek &amp; kembalikan pasien yang hilang tanpa sebab
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-amber-700 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all shrink-0" />
+            </button>
+          )}
 
           {/* 3. Bulanan Terapis */}
           {onOpenMonthlyReport && (

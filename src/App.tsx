@@ -2579,6 +2579,7 @@ export default function App() {
         }}
         onScrollToBox={handleScrollToBox}
         onOpenDailyDatabase={() => setIsDailyDatabaseOpen(true)}
+        onOpenRestoreQueue={() => setIsRestoreQueueOpen(true)}
         onOpenMonthlyReport={() => setIsMonthlyReportOpen(true)}
         onOpenResponseTimeAnalytics={() => setIsResponseTimeModalOpen(true)}
         onOpenIntelligence={handleOpenAnalytics}
