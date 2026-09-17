@@ -2007,6 +2007,49 @@ async function hydrateStateFromFirestoreIfNeeded(): Promise<void> {
   }
 }
 
+// PENTING: platform hosting bisa menjalankan LEBIH DARI SATU instance server ini
+// sekaligus saat trafik ramai (mis. banyak tablet mengakses bersamaan). Instance yang
+// SUDAH menyala lama tidak pernah otomatis tahu ada perubahan yang terjadi di instance
+// LAIN - hidrasi dari Firestore di atas cuma jalan SEKALI saat instance itu baru
+// menyala, bukan berulang. Akibatnya, kalau sebuah perangkat kebetulan "nyangkut" ke
+// instance yang sudah basi, me-refresh berkali-kali TETAP tidak membantu (refresh cuma
+// mengambil ulang dari INSTANCE YANG SAMA itu, bukan instance lain yang datanya lebih
+// baru) - persis gejala "sebagian browser sudah bersih, satu browser lain masih ada
+// sisa antrean lama walau sudah di-refresh berkali-kali".
+//
+// Perbaikannya: setiap instance yang SEDANG BERJALAN rutin menyamakan diri dengan
+// cadangan Firestore (yang sudah dijamin selalu segar berkat jaminan maxWait 5 detik),
+// memakai reconcileQueueStates yang sama supaya penggabungannya aman/tidak menghapus
+// data (union, bukan timpa mentah). Flag isExplicitReset/resetConfirmed sengaja
+// dimatikan dulu sebelum digabung - sinkronisasi latar belakang seperti ini TIDAK
+// BOLEH pernah memicu pengosongan antrean, itu cuma boleh terjadi dari aksi eksplisit
+// lewat tombol "Bersihkan Antrean".
+const PERIODIC_FIRESTORE_SYNC_INTERVAL_MS = 15 * 1000;
+function startPeriodicFirestoreSync() {
+  setInterval(async () => {
+    try {
+      if (isFirestoreMirrorDisabled) return;
+      const snapshot = await getDoc(QUEUE_STATE_DOC_REF);
+      if (!snapshot.exists()) return;
+      const cloudState = snapshot.data();
+      if (!cloudState || (!Array.isArray(cloudState.boxes) && !Array.isArray(cloudState.patients))) return;
+
+      const cloudStateForMerge = { ...cloudState, isExplicitReset: false, resetConfirmed: false };
+
+      await enqueueQueueWrite(async () => {
+        const localState = loadStateFromFile() || getInitialServerState();
+        const merged = reconcileQueueStates(localState, cloudStateForMerge);
+        if (JSON.stringify(merged) === JSON.stringify(localState)) return;
+        saveStateToFile(merged);
+        broadcastUpdate({ type: 'SYNC_STATE', state: merged });
+        console.log('[PeriodicSync] Instance ini disinkronkan ulang dari Firestore (menemukan perubahan dari instance lain).');
+      });
+    } catch (err) {
+      console.warn('[PeriodicSync] Gagal sinkronisasi periodik dari Firestore:', err);
+    }
+  }, PERIODIC_FIRESTORE_SYNC_INTERVAL_MS);
+}
+
 // Helper: reconcile box content based on contentUpdatedAt recency to prevent race condition regressions
 function pickBoxContentBase(existing: any, incoming: any): any {
   if (!existing) return incoming;
@@ -4147,6 +4190,11 @@ async function startServer() {
     hydrateMasterPatientsFromFirestoreIfNeeded(),
     hydrateRanapHistoryFromFirestoreIfNeeded(),
   ]);
+
+  // Setelah hidrasi awal selesai, mulai sinkronisasi periodik supaya instance ini
+  // (kalau ternyata ada instance lain yang juga berjalan) tetap ikut menyamakan diri
+  // dengan data terbaru di Firestore, bukan cuma sekali di awal nyala.
+  startPeriodicFirestoreSync();
 
   // Vite integration in development
   if (process.env.NODE_ENV !== 'production') {
