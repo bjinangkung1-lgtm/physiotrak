@@ -2794,6 +2794,7 @@ export default function App() {
                             onDeleteBox={handleRequestDeleteBox}
                             onClearBoxPatients={handleClearBoxPatients}
                             onDeletePatient={handleRequestDeletePatient}
+                            onRemovePatientFromBox={handleDeletePatient}
                             onUpdatePatient={handleUpdatePatient}
                             onEditBox={(b) => setEditingBox(b)}
                             onOpenPatientQR={(p, b) => {
@@ -2893,6 +2894,7 @@ export default function App() {
                         onDeleteBox={handleRequestDeleteBox}
                         onClearBoxPatients={handleClearBoxPatients}
                         onDeletePatient={handleRequestDeletePatient}
+                        onRemovePatientFromBox={handleDeletePatient}
                         onUpdatePatient={handleUpdatePatient}
                         onEditBox={(b) => setEditingBox(b)}
                         onOpenPatientQR={(p, b) => {
