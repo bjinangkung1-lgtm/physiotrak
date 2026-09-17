@@ -25,6 +25,7 @@ import { LainLainModal } from './components/LainLainModal';
 import { InventoryStockModal } from './components/InventoryStockModal';
 import { ResetConfirmPinModal } from './components/ResetConfirmPinModal';
 import { DeletePatientPasswordModal } from './components/DeletePatientPasswordModal';
+import { RestoreQueueModal } from './components/RestoreQueueModal';
 import { SopModal } from './components/SopModal';
 import { TherapistSidebar } from './components/TherapistSidebar';
 import { TherapistMobileBar } from './components/TherapistMobileBar';
@@ -1993,6 +1994,42 @@ export default function App() {
     setPendingDeletePatient(target);
   };
 
+  // Restore Antrean: kembalikan pasien dari Database Pasien Harian yang hilang
+  // tanpa sebab (tidak tercatat sengaja dihapus/direset - lihat RestoreQueueModal).
+  const [isRestoreQueueOpen, setIsRestoreQueueOpen] = useState(false);
+  const handleRestorePatientFromArchive = (visit: DailyPatientVisit) => {
+    const targetBox = boxes.find(b => b.id === visit.boxId);
+    const restoredPatient: PatientItem = {
+      id: visit.id,
+      boxId: targetBox ? targetBox.id : visit.boxId,
+      boxTitle: targetBox ? targetBox.title : visit.boxTitle,
+      officerName: targetBox ? targetBox.officerName : visit.officerName,
+      queueNumber: visit.queueNumber || '',
+      patientName: visit.patientName,
+      medicalRecordNo: visit.medicalRecordNo,
+      actionCode: visit.actionCode,
+      diagnosis: visit.diagnosis,
+      isWarning: !!visit.isWarning,
+      isRanap: !!visit.isRanap,
+      note: visit.note,
+      phoneNumber: visit.phoneNumber,
+      patientId: visit.patientId,
+      instructionImageUrl: visit.instructionImageUrl,
+      instructionImageUrls: visit.instructionImageUrls,
+      instructionPhotos: visit.instructionPhotos,
+      completed: !!visit.completed,
+      createdAt: visit.registeredAt || new Date().toISOString(),
+      completedAt: visit.completedAt || undefined,
+      calledCount: visit.calledCount || 0,
+      lastCalledAt: visit.calledAt || undefined,
+    };
+
+    hasLocalMutationRef.current = true;
+    knownPatientIdsRef.current.add(restoredPatient.id);
+    setPatients(prev => (prev.some(p => p.id === restoredPatient.id) ? prev : [...prev, restoredPatient]));
+    showAppToast(`Pasien "${restoredPatient.patientName}" berhasil dikembalikan ke antrean.`);
+  };
+
 
   // Update Patient Details
   const handleUpdatePatient = (updatedPatient: PatientItem) => {
@@ -3022,6 +3059,7 @@ export default function App() {
         isOpen={isMobileMoreOpen}
         onClose={() => setIsMobileMoreOpen(false)}
         onOpenDailyDatabase={() => setIsDailyDatabaseOpen(true)}
+        onOpenRestoreQueue={() => setIsRestoreQueueOpen(true)}
         onOpenMonthlyReport={() => setIsMonthlyReportOpen(true)}
         onOpenResponseTimeAnalytics={() => setIsResponseTimeModalOpen(true)}
         onOpenIntelligence={handleOpenAnalytics}
@@ -3115,6 +3153,14 @@ export default function App() {
         confirmLabel="OK, Hapus Kotak"
         warningTitle="Konfirmasi Hapus Kotak"
         warningBody={pendingDeleteBox ? `Kotak "${pendingDeleteBox.boxTitle}" beserta seluruh antreannya akan dihapus permanen dari sistem di seluruh perangkat. Masukkan password otorisasi untuk melanjutkan.` : undefined}
+      />
+
+      <RestoreQueueModal
+        isOpen={isRestoreQueueOpen}
+        onClose={() => setIsRestoreQueueOpen(false)}
+        livePatients={patients}
+        boxes={boxes}
+        onRestorePatient={handleRestorePatientFromArchive}
       />
 
       {/* Floating System Toast */}

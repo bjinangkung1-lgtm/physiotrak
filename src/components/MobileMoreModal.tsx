@@ -1,15 +1,15 @@
 import React from 'react';
-import { 
-  X, 
-  FileText, 
-  Users, 
-  Timer, 
-  Activity, 
-  QrCode, 
-  History, 
-  Volume2, 
-  FolderPlus, 
-  Trash2, 
+import {
+  X,
+  FileText,
+  Users,
+  Timer,
+  Activity,
+  QrCode,
+  History,
+  Volume2,
+  FolderPlus,
+  Trash2,
   Bell,
   Download,
   CheckCircle2,
@@ -21,7 +21,8 @@ import {
   Lock,
   KeyRound,
   UserCheck,
-  BookOpen
+  BookOpen,
+  Undo2
 } from 'lucide-react';
 import { getActiveOfficerName } from '../utils/appAuthService';
 
@@ -29,6 +30,7 @@ interface MobileMoreModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenDailyDatabase?: () => void;
+  onOpenRestoreQueue?: () => void;
   onOpenReport?: () => void;
   onOpenMonthlyReport?: () => void;
   onOpenResponseTimeAnalytics?: () => void;
@@ -54,6 +56,7 @@ export const MobileMoreModal: React.FC<MobileMoreModalProps> = ({
   isOpen,
   onClose,
   onOpenDailyDatabase,
+  onOpenRestoreQueue,
   onOpenReport,
   onOpenMonthlyReport,
   onOpenResponseTimeAnalytics,
@@ -216,6 +219,30 @@ export const MobileMoreModal: React.FC<MobileMoreModalProps> = ({
                 </div>
               </div>
               <span className="text-[10px] bg-teal-200 text-teal-950 font-black px-2 py-0.5 rounded-full border border-teal-300">
+                Buka
+              </span>
+            </button>
+          )}
+
+          {/* Restore Antrean - pulihkan pasien yang hilang tanpa sebab */}
+          {onOpenRestoreQueue && (
+            <button
+              onClick={() => {
+                onClose();
+                onOpenRestoreQueue();
+              }}
+              className="col-span-2 p-3 bg-amber-50/90 hover:bg-amber-100/90 rounded-xl border border-amber-300 flex items-center justify-between transition-all cursor-pointer shadow-2xs"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-amber-600 text-white flex items-center justify-center shadow-xs">
+                  <Undo2 className="w-4 h-4" />
+                </div>
+                <div className="text-left">
+                  <span className="text-xs font-black text-amber-950 block">Restore Antrean</span>
+                  <span className="text-[10px] text-amber-800">Cek &amp; kembalikan pasien yang hilang tanpa sebab</span>
+                </div>
+              </div>
+              <span className="text-[10px] bg-amber-200 text-amber-950 font-black px-2 py-0.5 rounded-full border border-amber-300">
                 Buka
               </span>
             </button>

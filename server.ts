@@ -45,6 +45,7 @@ const PHOTOS_DB_FILE = path.join(DATA_DIR, 'photos_db.json');
 const LAIN_LAIN_DB_FILE = path.join(DATA_DIR, 'lain_lain_db.json');
 const INVENTORY_DB_FILE = path.join(DATA_DIR, 'inventory_db.json');
 const SECURITY_CONFIG_FILE = path.join(DATA_DIR, 'security_config.json');
+const DELETION_AUDIT_FILE = path.join(DATA_DIR, 'deletion_audit.json');
 const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -2033,6 +2034,89 @@ function pickBoxContentBase(existing: any, incoming: any): any {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Log Audit Penghapusan & Reset (dipakai fitur "Restore Antrean" untuk
+// membedakan pasien yang MEMANG sengaja dihapus/direset dari yang benar-benar
+// hilang tanpa sebab - tanpa log ini, alat restore tidak bisa membedakan
+// keduanya dan berisiko "menghidupkan lagi" pasien yang sudah sengaja
+// dihapus atau sudah lewat setelah "Bersihkan Antrean" rutin).
+// ---------------------------------------------------------------------------
+function appendDeletionAudit(entry: Record<string, any>) {
+  try {
+    let list: any[] = [];
+    if (fs.existsSync(DELETION_AUDIT_FILE)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(DELETION_AUDIT_FILE, 'utf-8'));
+        if (Array.isArray(raw)) list = raw;
+      } catch {
+        // file corrupt, mulai ulang dari daftar kosong
+      }
+    }
+    list.unshift({
+      id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: new Date().toISOString(),
+      ...entry,
+    });
+    safeAtomicWriteJson(DELETION_AUDIT_FILE, list.slice(0, 1000));
+  } catch (err) {
+    console.warn('[DeletionAudit] Gagal menyimpan log audit:', err);
+  }
+}
+
+function loadDeletionAudit(): any[] {
+  try {
+    if (fs.existsSync(DELETION_AUDIT_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(DELETION_AUDIT_FILE, 'utf-8'));
+      if (Array.isArray(raw)) return raw;
+    }
+  } catch (err) {
+    console.warn('[DeletionAudit] Gagal membaca log audit:', err);
+  }
+  return [];
+}
+
+// Deteksi ID pasien/kotak yang BARU PERTAMA KALI muncul di tombstone request ini
+// (belum pernah tercatat sebelumnya di existingState), lalu catat detailnya
+// (nama, No. RM, kotak, status selesai/belum) SEBELUM data itu difilter hilang
+// oleh reconcileQueueStates. Harus dipanggil SEBELUM reconcileQueueStates supaya
+// existingState masih punya data lengkap pasien/kotak yang mau dihapus.
+function logNewDeletionsForAudit(existingState: any, incomingPayload: any) {
+  try {
+    const existingDeletedP = new Set(Array.isArray(existingState?.deletedPatientIds) ? existingState.deletedPatientIds : []);
+    const incomingDeletedP: string[] = Array.isArray(incomingPayload?.deletedPatientIds) ? incomingPayload.deletedPatientIds : [];
+    const existingPatients: any[] = Array.isArray(existingState?.patients) ? existingState.patients : [];
+    for (const id of incomingDeletedP) {
+      if (id && !existingDeletedP.has(id)) {
+        const p = existingPatients.find((x) => x && x.id === id);
+        appendDeletionAudit({
+          type: 'patient',
+          targetId: id,
+          targetName: p?.patientName || null,
+          medicalRecordNo: p?.medicalRecordNo || null,
+          boxId: p?.boxId || null,
+          wasCompleted: p ? !!p.completed : null,
+        });
+      }
+    }
+
+    const existingDeletedB = new Set(Array.isArray(existingState?.deletedBoxIds) ? existingState.deletedBoxIds : []);
+    const incomingDeletedB: string[] = Array.isArray(incomingPayload?.deletedBoxIds) ? incomingPayload.deletedBoxIds : [];
+    const existingBoxes: any[] = Array.isArray(existingState?.boxes) ? existingState.boxes : [];
+    for (const id of incomingDeletedB) {
+      if (id && !existingDeletedB.has(id)) {
+        const b = existingBoxes.find((x) => x && x.id === id);
+        appendDeletionAudit({
+          type: 'box',
+          targetId: id,
+          targetName: b?.title || null,
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[DeletionAudit] Gagal mendeteksi penghapusan baru:', err);
+  }
+}
+
 // Smart State Reconciliation Helper (prevents lost updates when 30+ devices sync simultaneously)
 function reconcileQueueStates(existingState: any, incomingPayload: any) {
   if (!existingState) existingState = getInitialServerState();
@@ -2514,6 +2598,13 @@ app.get('/api/system/status', (req, res) => {
   res.json({ status: 'ok', firestoreMirrorDisabled: isFirestoreMirrorDisabled });
 });
 
+// GET log audit penghapusan pasien/kotak & reset antrean (dipakai fitur "Restore
+// Antrean" di klien untuk membedakan pasien yang memang sengaja dihapus/direset
+// dari yang benar-benar hilang tanpa sebab).
+app.get('/api/deletion-audit', (req, res) => {
+  res.json({ status: 'ok', entries: loadDeletionAudit() });
+});
+
 // POST update full queue state and notify all connected devices instantly
 app.post('/api/queue', async (req, res) => {
   try {
@@ -2526,6 +2617,7 @@ app.post('/api/queue', async (req, res) => {
 
     await enqueueQueueWrite(async () => {
       const existingState = loadStateFromFile() || getInitialServerState();
+      logNewDeletionsForAudit(existingState, payload);
       const mergedState = reconcileQueueStates(existingState, payload);
 
       saveStateToFile(mergedState);
@@ -2580,6 +2672,11 @@ app.post('/api/queue/reset', async (req, res) => {
       };
 
       saveStateToFile(resetState);
+      appendDeletionAudit({
+        type: 'reset',
+        timestamp: resetTime,
+        patientsCleared: Array.isArray(existingState.patients) ? existingState.patients.length : 0,
+      });
       broadcastUpdate({ type: 'SYNC_STATE', state: resetState, senderDeviceId });
       console.log(`[QueueReset] Queue purged clean by ${senderDeviceId || 'unknown'} at ${resetTime}.`);
     });
