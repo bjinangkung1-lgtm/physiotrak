@@ -1548,7 +1548,13 @@ function loadStateFromFile() {
           }
           parsed.boxes = parsed.boxes.map(sanitizeServerBox);
           const existingIds = new Set(parsed.boxes.map((b: any) => b.id));
-          const missingBoxes = initial.boxes.filter((b: any) => !existingIds.has(b.id));
+          // PENTING: jangan pulihkan kotak bawaan/contoh sistem yang MEMANG sudah
+          // sengaja dihapus (lihat deletedBoxIds, ditulis oleh reconcileQueueStates).
+          // Sebelumnya baris ini tidak mengecek itu sama sekali, sehingga kotak
+          // bawaan (mis. salah satu terapis di getInitialServerState) yang dihapus
+          // lewat aplikasi akan MUNCUL LAGI SENDIRI setiap kali state ini dimuat ulang.
+          const deletedBoxIdSet = new Set(Array.isArray(parsed.deletedBoxIds) ? parsed.deletedBoxIds : []);
+          const missingBoxes = initial.boxes.filter((b: any) => !existingIds.has(b.id) && !deletedBoxIdSet.has(b.id));
           if (missingBoxes.length > 0) {
             parsed.boxes = [...parsed.boxes, ...missingBoxes];
           }
@@ -2064,6 +2070,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       preResetPatientIds,
       deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
       deletedCommunicationNoteIds: Array.isArray(existingState.deletedCommunicationNoteIds) ? existingState.deletedCommunicationNoteIds : [],
+      deletedBoxIds: Array.isArray(existingState.deletedBoxIds) ? existingState.deletedBoxIds : [],
       lastUpdated: new Date().toISOString(),
     };
   }
@@ -2202,7 +2209,19 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   // 2. Reconcile Boxes
   const existingBoxes: any[] = Array.isArray(existingState.boxes) ? existingState.boxes : [];
   const incomingBoxes: any[] = Array.isArray(incomingPayload.boxes) ? incomingPayload.boxes : [];
-  const deletedBoxIds = new Set(Array.isArray(incomingPayload.deletedBoxIds) ? incomingPayload.deletedBoxIds : []);
+
+  // PENTING: gabungkan (bukan cuma pakai) tombstone box dari request INI dengan yang
+  // sudah tersimpan sebelumnya, lalu SIMPAN daftar gabungan itu ke state (lihat field
+  // deletedBoxIds di return di bawah). Sebelumnya daftar ini TIDAK PERNAH disimpan
+  // permanen - hanya dipakai sekali untuk memfilter box di request ini saja. Akibatnya,
+  // kotak yang kebetulan salah satu dari kotak bawaan/contoh sistem (lihat
+  // getInitialServerState) akan MUNCUL LAGI SENDIRI di load berikutnya, karena
+  // loadStateFromFile() punya logika "isi ulang kotak bawaan yang hilang" yang tidak
+  // bisa membedakan "memang belum pernah ada" dari "sudah sengaja dihapus".
+  const existingDeletedBoxIds: string[] = Array.isArray(existingState.deletedBoxIds) ? existingState.deletedBoxIds : [];
+  const incomingDeletedBoxIds: string[] = Array.isArray(incomingPayload.deletedBoxIds) ? incomingPayload.deletedBoxIds : [];
+  const cumulativeDeletedBoxList = Array.from(new Set([...existingDeletedBoxIds, ...incomingDeletedBoxIds])).slice(-500);
+  const deletedBoxIds = new Set(cumulativeDeletedBoxList);
 
   const existingOrderWatermark = existingState.boxOrderUpdatedAt
     ? new Date(existingState.boxOrderUpdatedAt).getTime() : 0;
@@ -2436,6 +2455,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
     preResetPatientIds: Array.from(preResetPatientIds),
     deletedRanapIds: cumulativeDeletedRanapList,
     deletedCommunicationNoteIds: cumulativeDeletedCommNoteIds,
+    deletedBoxIds: cumulativeDeletedBoxList,
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -2555,6 +2575,7 @@ app.post('/api/queue/reset', async (req, res) => {
         preResetPatientIds,
         deletedRanapIds: Array.isArray(existingState.deletedRanapIds) ? existingState.deletedRanapIds : [],
         deletedCommunicationNoteIds: Array.isArray(existingState.deletedCommunicationNoteIds) ? existingState.deletedCommunicationNoteIds : [],
+        deletedBoxIds: Array.isArray(existingState.deletedBoxIds) ? existingState.deletedBoxIds : [],
         lastUpdated: new Date().toISOString(),
       };
 

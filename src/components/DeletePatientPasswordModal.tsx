@@ -39,6 +39,12 @@ interface DeletePatientPasswordModalProps {
   onClose: () => void;
   onConfirmDelete: () => void;
   patientName?: string;
+  // Dipakai ulang juga untuk otorisasi hapus KOTAK antrean (bukan cuma pasien) -
+  // props di bawah membiarkan judul & pesan menyesuaikan tanpa duplikasi modal.
+  title?: string;
+  confirmLabel?: string;
+  warningTitle?: string;
+  warningBody?: string;
 }
 
 export const DeletePatientPasswordModal: React.FC<DeletePatientPasswordModalProps> = ({
@@ -46,6 +52,10 @@ export const DeletePatientPasswordModal: React.FC<DeletePatientPasswordModalProp
   onClose,
   onConfirmDelete,
   patientName,
+  title = 'Otorisasi Hapus Pasien',
+  confirmLabel = 'OK, Hapus Pasien',
+  warningTitle = 'Konfirmasi Hapus Pasien',
+  warningBody,
 }) => {
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -144,7 +154,7 @@ export const DeletePatientPasswordModal: React.FC<DeletePatientPasswordModalProp
             </div>
             <div>
               <h2 className="text-base font-black tracking-tight text-white">
-                Otorisasi Hapus Pasien
+                {title}
               </h2>
               <p className="text-[11px] text-slate-300 font-medium">
                 Sistem Antrian & Rekam Medis IRM RSPP
@@ -256,9 +266,11 @@ export const DeletePatientPasswordModal: React.FC<DeletePatientPasswordModalProp
               <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 flex items-start gap-2.5">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div className="text-xs text-amber-900">
-                  <p className="font-bold">Konfirmasi Hapus Pasien</p>
+                  <p className="font-bold">{warningTitle}</p>
                   <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
-                    Pasien{patientName ? <> <strong>{patientName}</strong></> : ''} akan dihapus permanen dari antrean di seluruh perangkat. Masukkan password otorisasi untuk melanjutkan.
+                    {warningBody || (
+                      <>Pasien{patientName ? <> <strong>{patientName}</strong></> : ''} akan dihapus permanen dari antrean di seluruh perangkat. Masukkan password otorisasi untuk melanjutkan.</>
+                    )}
                   </p>
                 </div>
               </div>
@@ -318,7 +330,7 @@ export const DeletePatientPasswordModal: React.FC<DeletePatientPasswordModalProp
                   className="flex-1 py-2.5 bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-700 hover:to-red-800 active:scale-98 text-white text-xs font-black rounded-xl shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                 >
                   <Trash2 className="w-4 h-4" />
-                  <span>OK, Hapus Pasien</span>
+                  <span>{confirmLabel}</span>
                 </button>
               </div>
 

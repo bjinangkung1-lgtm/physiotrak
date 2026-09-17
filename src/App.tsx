@@ -1967,6 +1967,15 @@ export default function App() {
     }
   };
 
+  // Meminta konfirmasi password sebelum benar-benar menghapus KOTAK antrean.
+  // handleDeleteBox di atas baru dipanggil setelah password diverifikasi benar.
+  const [pendingDeleteBox, setPendingDeleteBox] = useState<{ boxId: string; transferTargetBoxId?: string; boxTitle: string } | null>(null);
+  const handleRequestDeleteBox = (boxId: string, transferTargetBoxId?: string) => {
+    const target = boxes.find(b => b.id === boxId);
+    if (!target) return;
+    setPendingDeleteBox({ boxId, transferTargetBoxId, boxTitle: target.title });
+  };
+
   // Delete Patient
   const handleDeletePatient = (patientId: string) => {
     hasLocalMutationRef.current = true;
@@ -2744,7 +2753,7 @@ export default function App() {
                             onUpdateBoxColor={handleUpdateBoxColor}
                             onUpdateBoxImage={handleUpdateBoxImage}
                             onUpdateBoxImages={handleUpdateBoxImages}
-                            onDeleteBox={handleDeleteBox}
+                            onDeleteBox={handleRequestDeleteBox}
                             onClearBoxPatients={handleClearBoxPatients}
                             onDeletePatient={handleRequestDeletePatient}
                             onUpdatePatient={handleUpdatePatient}
@@ -2843,7 +2852,7 @@ export default function App() {
                         onUpdateBoxColor={handleUpdateBoxColor}
                         onUpdateBoxImage={handleUpdateBoxImage}
                         onUpdateBoxImages={handleUpdateBoxImages}
-                        onDeleteBox={handleDeleteBox}
+                        onDeleteBox={handleRequestDeleteBox}
                         onClearBoxPatients={handleClearBoxPatients}
                         onDeletePatient={handleRequestDeletePatient}
                         onUpdatePatient={handleUpdatePatient}
@@ -2939,7 +2948,7 @@ export default function App() {
         onClose={() => setEditingBox(null)}
         box={editingBox}
         onUpdateBox={handleUpdateBox}
-        onDeleteBox={handleDeleteBox}
+        onDeleteBox={handleRequestDeleteBox}
       />
 
       <CallHistoryModal
@@ -3092,6 +3101,20 @@ export default function App() {
           }
         }}
         patientName={pendingDeletePatient?.patientName}
+      />
+
+      <DeletePatientPasswordModal
+        isOpen={!!pendingDeleteBox}
+        onClose={() => setPendingDeleteBox(null)}
+        onConfirmDelete={() => {
+          if (pendingDeleteBox) {
+            handleDeleteBox(pendingDeleteBox.boxId, pendingDeleteBox.transferTargetBoxId);
+          }
+        }}
+        title="Otorisasi Hapus Kotak"
+        confirmLabel="OK, Hapus Kotak"
+        warningTitle="Konfirmasi Hapus Kotak"
+        warningBody={pendingDeleteBox ? `Kotak "${pendingDeleteBox.boxTitle}" beserta seluruh antreannya akan dihapus permanen dari sistem di seluruh perangkat. Masukkan password otorisasi untuk melanjutkan.` : undefined}
       />
 
       {/* Floating System Toast */}
