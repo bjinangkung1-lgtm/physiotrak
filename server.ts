@@ -1151,7 +1151,35 @@ interface SSEClientInfo {
 
 let sseClients: SSEClientInfo[] = [];
 
-function broadcastUpdate(data: any) {
+// Setiap klien yang menerima state dengan isExplicitReset/resetConfirmed = true akan
+// LANGSUNG MENGOSONGKAN seluruh antrean di layarnya (itu memang gunanya: tombol
+// "Bersihkan Antrean" harus berlaku serentak di semua perangkat). Karena itu flag ini
+// berbahaya kalau sampai ikut terkirim di siaran yang BUKAN reset.
+//
+// Bahayanya nyata: state yang tersimpan di disk memang menyimpan isExplicitReset=true
+// setelah reset yang sah (saat itu patients memang masih kosong). Kalau instance itu
+// lalu mendapat pasien dari jalur yang TIDAK lewat reconcileQueueStates (mis. hasil
+// sinkronisasi periodik dari Firestore), file-nya bisa berisi kombinasi mustahil
+// "isExplicitReset=true TAPI ada pasien" - dan setiap siaran berikutnya dari instance
+// itu (simpan petugas, simpan kunjungan harian, unggah gambar kotak, dll) akan
+// memerintahkan SEMUA perangkat mengosongkan antreannya, berulang kali.
+//
+// Jadi di sini, di SATU titik yang dilewati semua siaran, flag reset hanya boleh lolos
+// kalau daftar pasiennya memang kosong - persis bentuk reset yang sah. Kombinasi
+// "reset + masih ada pasien" tidak mungkin sah, jadi selalu dinetralkan.
+function sanitizeResetFlagsForBroadcast(data: any): any {
+  if (!data || typeof data !== 'object' || !data.state || typeof data.state !== 'object') return data;
+  const state = data.state;
+  if (!state.isExplicitReset && !state.resetConfirmed) return data;
+  const patientCount = Array.isArray(state.patients) ? state.patients.length : 0;
+  if (patientCount === 0) return data;
+
+  console.warn(`[Broadcast] Flag reset ikut terbawa padahal masih ada ${patientCount} pasien - flag dinetralkan agar perangkat lain tidak ikut terkosongkan.`);
+  return { ...data, state: { ...state, isExplicitReset: false, resetConfirmed: false } };
+}
+
+function broadcastUpdate(rawData: any) {
+  const data = sanitizeResetFlagsForBroadcast(rawData);
   const payload = `data: ${JSON.stringify(data)}\n\n`;
   const deadClientIds: string[] = [];
 
@@ -2061,11 +2089,22 @@ function supplementStateFromCloud(localState: any, cloudState: any): { merged: a
     return { merged: localState, changed: false };
   }
 
+  const mergedPatients = [...localPatients, ...missingPatients];
+
   return {
     merged: {
       ...localState,
-      patients: [...localPatients, ...missingPatients],
+      patients: mergedPatients,
       boxes: [...localBoxes, ...missingBoxes],
+      // Instance yang baru saja direset menyimpan isExplicitReset=true di filenya
+      // (saat itu memang belum ada pasien). Begitu di sini kita menambahkan pasien
+      // yang ditemukan dari instance lain, flag itu TIDAK BOLEH ikut terbawa: kalau
+      // terbawa, file jadi berisi "reset=true padahal ada pasien", lalu setiap siaran
+      // dari instance ini akan menyuruh semua perangkat mengosongkan antreannya.
+      // Aturannya sama persis dengan yang dipakai reconcileQueueStates: flag reset
+      // hanya boleh tetap menyala selama daftar pasien memang masih kosong.
+      isExplicitReset: Boolean(localState.isExplicitReset) && mergedPatients.length === 0,
+      resetConfirmed: Boolean(localState.resetConfirmed) && mergedPatients.length === 0,
     },
     changed: true,
   };

@@ -242,6 +242,47 @@ export const getLocalPreResetPatientIds = preResetPatientStore.getTombstones;
 export const addLocalPreResetPatientId = preResetPatientStore.addTombstone;
 export const clearLocalPreResetPatientIds = preResetPatientStore.clearTombstones;
 
+// Menerima state ber-flag reset artinya perangkat ini LANGSUNG mengosongkan seluruh
+// antrean di layarnya. Itu memang perilaku yang benar untuk tombol "Bersihkan Antrean",
+// tapi berarti satu siaran yang keliru membawa flag itu bisa mengosongkan layar petugas
+// tanpa ada yang menekan apa pun. Dua penjagaan di bawah ini membuat hal itu tidak
+// mungkin terjadi lagi:
+//   1. Reset yang sah SELALU berisi daftar pasien kosong. Siaran yang mengaku reset
+//      tapi masih membawa daftar pasien adalah state tidak konsisten - diabaikan.
+//   2. Reset hanya diproses kalau benar-benar LEBIH BARU dari reset terakhir yang sudah
+//      pernah diproses perangkat ini, sehingga siaran lama yang terulang (mis. dari
+//      instance server yang filenya tertinggal) tidak bisa mengosongkan layar berkali-kali.
+export const LAST_RESET_AT_KEY = 'antrian_last_reset_at';
+
+export function shouldApplyResetEvent(payload: any): boolean {
+  if (!payload) return false;
+  if (!payload.isExplicitReset && !payload.resetConfirmed) return false;
+  if (Array.isArray(payload.patients) && payload.patients.length > 0) return false;
+
+  const incoming = payload.lastResetAt;
+  if (!incoming) return true;
+
+  try {
+    const previous = localStorage.getItem(LAST_RESET_AT_KEY);
+    if (!previous) return true;
+    const incomingMs = new Date(incoming).getTime();
+    const previousMs = new Date(previous).getTime();
+    if (isNaN(incomingMs) || isNaN(previousMs)) return true;
+    return incomingMs > previousMs;
+  } catch {
+    return true;
+  }
+}
+
+export function rememberResetApplied(lastResetAt?: string | null) {
+  if (!lastResetAt) return;
+  try {
+    localStorage.setItem(LAST_RESET_AT_KEY, lastResetAt);
+  } catch {
+    // ignore
+  }
+}
+
 // Safe recency-based box content reconciler: ensures newer color/name changes aren't overwritten by stale broadcasts
 export const mergeBoxesByRecency = (currentBoxes: QueueBox[], incomingRaw: QueueBox[], deletedBoxIds?: string[]): QueueBox[] => {
   const localBoxTombstones = getLocalBoxTombstones();
@@ -866,20 +907,10 @@ export default function App() {
       }
 
       // Handle Explicit Reset across all devices
-      const isResetEvent = Boolean(
-        syncData.isExplicitReset ||
-        syncData.resetConfirmed
-      );
-
-      if (syncData.lastResetAt) {
-        try {
-          localStorage.setItem('antrian_last_reset_at', syncData.lastResetAt);
-        } catch {
-          // ignore
-        }
-      }
+      const isResetEvent = shouldApplyResetEvent(syncData);
 
       if (isResetEvent) {
+        rememberResetApplied(syncData.lastResetAt);
         if (Array.isArray(syncData.preResetPatientIds) && syncData.preResetPatientIds.length > 0) {
           syncData.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
         }
@@ -1018,14 +1049,6 @@ export default function App() {
     cloudDatabaseService.getQueueState().then((cloudState) => {
       if (!isMounted || !cloudState) return;
 
-      if (cloudState.lastResetAt) {
-        try {
-          localStorage.setItem('antrian_last_reset_at', cloudState.lastResetAt);
-        } catch {
-          // ignore
-        }
-      }
-
       if (cloudState.boxOrderUpdatedAt) {
         updateBoxOrderWatermarkIfNewer(cloudState.boxOrderUpdatedAt);
       }
@@ -1062,14 +1085,14 @@ export default function App() {
       // tampak "0 pasien" padahal antrean sebenarnya tidak kosong - kalau ini
       // dianggap reset, `setPatients([])` di bawah akan menghapus pasien yang
       // BARU SAJA benar dipulihkan lewat fetch REST /api/queue (race kondisi
-      // antara 2 sumber hydrasi awal). isExplicitReset/resetConfirmed sendiri
-      // aman dipakai sendirian karena keduanya SELALU di-set eksplisit oleh
-      // cloudDatabaseService.saveQueueState (lihat cloudDatabaseService.ts).
-      const isCloudExplicitReset = Boolean(
-        cloudState.isExplicitReset || cloudState.resetConfirmed
-      );
+      // antara 2 sumber hydrasi awal). Flag isExplicitReset/resetConfirmed pun
+      // TIDAK lagi dipercaya begitu saja - lihat shouldApplyResetEvent: reset
+      // hanya diproses kalau memang lebih baru dari reset terakhir yang sudah
+      // pernah diterapkan perangkat ini DAN daftar pasiennya memang kosong.
+      const isCloudExplicitReset = shouldApplyResetEvent(cloudState);
 
       if (isCloudExplicitReset) {
+        rememberResetApplied(cloudState.lastResetAt);
         if (Array.isArray(cloudState.preResetPatientIds) && cloudState.preResetPatientIds.length > 0) {
           cloudState.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
         }
@@ -1160,14 +1183,6 @@ export default function App() {
             updateBoxOrderWatermarkIfNewer(data.state.boxOrderUpdatedAt);
           }
 
-          if (data.state.lastResetAt) {
-            try {
-              localStorage.setItem('antrian_last_reset_at', data.state.lastResetAt);
-            } catch {
-              // ignore
-            }
-          }
-
           if (Array.isArray(data.state.preResetPatientIds) && data.state.preResetPatientIds.length > 0) {
             data.state.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
           }
@@ -1196,12 +1211,10 @@ export default function App() {
             });
           }
 
-          const isServerReset = Boolean(
-            data.state.isExplicitReset ||
-            data.state.resetConfirmed
-          );
+          const isServerReset = shouldApplyResetEvent(data.state);
 
           if (isServerReset) {
+            rememberResetApplied(data.state.lastResetAt);
             if (Array.isArray(data.state.preResetPatientIds) && data.state.preResetPatientIds.length > 0) {
               data.state.preResetPatientIds.forEach((id: string) => addLocalPreResetPatientId(id));
             }
