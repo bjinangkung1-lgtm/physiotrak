@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import confetti from 'canvas-confetti';
 import { QueueBox, PatientItem, CallHistoryRecord, BoxColor, AppNotification, DailyPatientVisit, MasterPatient, PatientVisitHistoryItem, RanapQueueItem, RanapCategory, RanapHistoryItem, CommunicationNote } from './types';
 import { INITIAL_BOXES, INITIAL_PATIENTS, INITIAL_CALL_HISTORY } from './data/initialData';
 import { getLocalDateStringWIB } from './utils/dateHelper';
@@ -954,9 +953,6 @@ export default function App() {
               p => !p.completed && !knownPatientIdsRef.current.has(p.id)
             );
             if (newRemotePatients.length > 0) {
-              if (soundEnabled) {
-                playChimeSound('new-patient');
-              }
               const latest = newRemotePatients[newRemotePatients.length - 1];
               const targetB = (syncData.boxes || boxes).find(b => b.id === latest.boxId);
               const arrivalNotif: AppNotification = {
@@ -1436,11 +1432,6 @@ export default function App() {
       return updated;
     });
 
-    confetti({
-      particleCount: 40,
-      spread: 60,
-      origin: { y: 0.8 }
-    });
     showAppToast(`Tindakan Ranap ${target.patientName} (Ruang ${target.roomNumber}) selesai & tersimpan di Riwayat.`);
   };
 
@@ -1637,14 +1628,6 @@ export default function App() {
       // Play completion chime
       if (soundEnabled) playChimeSound('success');
 
-      // Trigger light confetti effect
-      confetti({
-        particleCount: 25,
-        spread: 60,
-        origin: { y: 0.8 },
-        colors: ['#10b981', '#06b6d4', '#3b82f6']
-      });
-
       // Log completion
       const targetBox = boxes.find(b => b.id === target.boxId);
       if (targetBox) {
@@ -1814,11 +1797,6 @@ export default function App() {
 
     // Append new patient at the bottom of the queue
     setPatients(prev => [...prev.filter(p => p.id !== newPatient.id), newPatient]);
-
-    // Sound notification alert on new input
-    if (soundEnabled) {
-      playChimeSound('new-patient');
-    }
 
     // Mark target box as having unread new input
     setBoxes(prev => prev.map(b => b.id === patientData.boxId ? { ...b, hasUnreadNewInput: true } : b));
@@ -2162,13 +2140,6 @@ export default function App() {
     if (soundEnabled) {
       playChimeSound('success');
     }
-
-    confetti({
-      particleCount: 45,
-      spread: 75,
-      origin: { y: 0.7 },
-      colors: ['#0d9488', '#0284c7', '#10b981', '#f59e0b']
-    });
 
     const returnNotif: AppNotification = {
       id: generateUniqueId('notif-kembali-peralihan'),
