@@ -2018,13 +2018,59 @@ async function hydrateStateFromFirestoreIfNeeded(): Promise<void> {
 // sisa antrean lama walau sudah di-refresh berkali-kali".
 //
 // Perbaikannya: setiap instance yang SEDANG BERJALAN rutin menyamakan diri dengan
-// cadangan Firestore (yang sudah dijamin selalu segar berkat jaminan maxWait 5 detik),
-// memakai reconcileQueueStates yang sama supaya penggabungannya aman/tidak menghapus
-// data (union, bukan timpa mentah). Flag isExplicitReset/resetConfirmed sengaja
-// dimatikan dulu sebelum digabung - sinkronisasi latar belakang seperti ini TIDAK
-// BOLEH pernah memicu pengosongan antrean, itu cuma boleh terjadi dari aksi eksplisit
-// lewat tombol "Bersihkan Antrean".
+// cadangan Firestore. PENTING: TIDAK memakai reconcileQueueStates di sini - fungsi itu
+// dirancang untuk kasus "data yang BARU MASUK dari klien pasti sama baru atau lebih baru
+// dari yang sudah tersimpan", jadi utk field² seperti boxId/note/actionCode ia MENANG-
+// KAN begitu saja nilai dari sisi "incoming". Itu benar utk klien yang POST perubahan
+// miliknya sendiri, tapi salah total dipakai di arah SEBALIKNYA di sini: cadangan
+// Firestore & mirror-nya masih boleh punya jeda beberapa detik dari perubahan lokal yang
+// PALING BARU, jadi kalau dipakai sbg "incoming" ke reconcileQueueStates, cadangan yang
+// SEDIKIT BASI itu bisa balas menimpa data lokal yang justru lebih baru (mis. pasien
+// yang BARU SAJA dipindah kotaknya keliatan "geser-geser sendiri" balik ke kotak lama
+// tiap giliran sinkron, sampai cadangan Firestore-nya sempat menyusul).
+//
+// Jadi sinkron periodik ini sengaja dibuat SEARAH & konservatif: HANYA menambahkan
+// pasien/kotak yang di lokal BENAR-BENAR TIDAK ADA sama sekali (menutup celah instance
+// yang ketinggalan info), dan TIDAK PERNAH mengubah/menimpa field apa pun dari pasien
+// atau kotak yang sudah ada di lokal - lokal selalu dianggap lebih tahu tentang datanya
+// sendiri. Reset tetap tidak mungkin terpicu dari sini (lihat filter isExplicitReset).
 const PERIODIC_FIRESTORE_SYNC_INTERVAL_MS = 15 * 1000;
+
+function supplementStateFromCloud(localState: any, cloudState: any): { merged: any; changed: boolean } {
+  let changed = false;
+
+  const deletedPatientIds = new Set<string>(Array.isArray(localState.deletedPatientIds) ? localState.deletedPatientIds : []);
+  const preResetPatientIds = new Set<string>(Array.isArray(localState.preResetPatientIds) ? localState.preResetPatientIds : []);
+  const deletedBoxIds = new Set<string>(Array.isArray(localState.deletedBoxIds) ? localState.deletedBoxIds : []);
+
+  const localPatients: any[] = Array.isArray(localState.patients) ? localState.patients : [];
+  const localPatientIds = new Set(localPatients.map((p) => p && p.id).filter(Boolean));
+  const cloudPatients: any[] = Array.isArray(cloudState.patients) ? cloudState.patients : [];
+  const missingPatients = cloudPatients.filter((p) =>
+    p && p.id && !localPatientIds.has(p.id) && !deletedPatientIds.has(p.id) && !preResetPatientIds.has(p.id)
+  );
+  if (missingPatients.length > 0) changed = true;
+
+  const localBoxes: any[] = Array.isArray(localState.boxes) ? localState.boxes : [];
+  const localBoxIds = new Set(localBoxes.map((b) => b && b.id).filter(Boolean));
+  const cloudBoxes: any[] = Array.isArray(cloudState.boxes) ? cloudState.boxes : [];
+  const missingBoxes = cloudBoxes.filter((b) => b && b.id && !localBoxIds.has(b.id) && !deletedBoxIds.has(b.id));
+  if (missingBoxes.length > 0) changed = true;
+
+  if (!changed) {
+    return { merged: localState, changed: false };
+  }
+
+  return {
+    merged: {
+      ...localState,
+      patients: [...localPatients, ...missingPatients],
+      boxes: [...localBoxes, ...missingBoxes],
+    },
+    changed: true,
+  };
+}
+
 function startPeriodicFirestoreSync() {
   setInterval(async () => {
     try {
@@ -2034,15 +2080,13 @@ function startPeriodicFirestoreSync() {
       const cloudState = snapshot.data();
       if (!cloudState || (!Array.isArray(cloudState.boxes) && !Array.isArray(cloudState.patients))) return;
 
-      const cloudStateForMerge = { ...cloudState, isExplicitReset: false, resetConfirmed: false };
-
       await enqueueQueueWrite(async () => {
         const localState = loadStateFromFile() || getInitialServerState();
-        const merged = reconcileQueueStates(localState, cloudStateForMerge);
-        if (JSON.stringify(merged) === JSON.stringify(localState)) return;
+        const { merged, changed } = supplementStateFromCloud(localState, cloudState);
+        if (!changed) return;
         saveStateToFile(merged);
         broadcastUpdate({ type: 'SYNC_STATE', state: merged });
-        console.log('[PeriodicSync] Instance ini disinkronkan ulang dari Firestore (menemukan perubahan dari instance lain).');
+        console.log('[PeriodicSync] Instance ini menambahkan data yang tadinya belum ada (ditemukan dari instance lain).');
       });
     } catch (err) {
       console.warn('[PeriodicSync] Gagal sinkronisasi periodik dari Firestore:', err);
