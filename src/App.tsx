@@ -314,6 +314,43 @@ function generateUniqueId(prefix: string = 'id'): string {
   return `${prefix}-${Date.now()}-${entropy}`;
 }
 
+// Menentukan status ceklis mana yang menang saat dua versi pasien digabungkan.
+//
+// Dulu aturannya "sekali selesai, tetap selesai" (operator ATAU). Itu memang menjaga
+// hal yang nyata: tablet yang lama tertidur lalu bangun membawa data usang tidak boleh
+// menghidupkan kembali pasien yang sudah diceklis petugas lain. Tapi akibatnya
+// PEMBATALAN ceklis tidak pernah bisa menular ke perangkat lain sama sekali - status
+// hanya bisa naik, tidak pernah turun.
+//
+// Sekarang pemenangnya ditentukan oleh JAM perubahan (completionUpdatedAt), pola yang
+// sama seperti yang sudah dipakai untuk perubahan isi kotak. Pembatalan ikut menular,
+// sementara tablet basi tetap kalah karena stempelnya lebih tua.
+//
+// Data lama yang belum punya stempel sama sekali tetap memakai aturan lama, supaya
+// tidak ada perilaku yang berubah mendadak saat pembaruan ini baru dipasang.
+export function pickCompletionState(
+  existing: { completed?: boolean; completionUpdatedAt?: string },
+  incoming: { completed?: boolean; completionUpdatedAt?: string }
+): { completed: boolean; completionUpdatedAt?: string } {
+  const exMs = existing && existing.completionUpdatedAt ? new Date(existing.completionUpdatedAt).getTime() : NaN;
+  const inMs = incoming && incoming.completionUpdatedAt ? new Date(incoming.completionUpdatedAt).getTime() : NaN;
+  const exValid = !isNaN(exMs);
+  const inValid = !isNaN(inMs);
+
+  if (exValid && inValid) {
+    return inMs >= exMs
+      ? { completed: Boolean(incoming.completed), completionUpdatedAt: incoming.completionUpdatedAt }
+      : { completed: Boolean(existing.completed), completionUpdatedAt: existing.completionUpdatedAt };
+  }
+  if (inValid) {
+    return { completed: Boolean(incoming.completed), completionUpdatedAt: incoming.completionUpdatedAt };
+  }
+  if (exValid) {
+    return { completed: Boolean(existing.completed), completionUpdatedAt: existing.completionUpdatedAt };
+  }
+  return { completed: Boolean((incoming && incoming.completed) || (existing && existing.completed)), completionUpdatedAt: undefined };
+}
+
 // Helper function to safely merge incoming patient array with current state (prevents accidental wiping on cold start)
 export function reconcileClientPatients(
   currentPatients: PatientItem[],
@@ -347,19 +384,24 @@ export function reconcileClientPatients(
     if (!existing) {
       patientMap.set(inP.id, { ...inP });
     } else {
-      const isCompleted = Boolean(inP.completed || existing.completed);
+      const { completed: isCompleted, completionUpdatedAt } = pickCompletionState(existing, inP);
       const calledCount = Math.max(Number(inP.calledCount || 0), Number(existing.calledCount || 0));
       const lastCalledAt = inP.lastCalledAt && (!existing.lastCalledAt || new Date(inP.lastCalledAt) >= new Date(existing.lastCalledAt))
         ? inP.lastCalledAt
         : existing.lastCalledAt;
-      const completedAt = inP.completedAt && (!existing.completedAt || new Date(inP.completedAt) >= new Date(existing.completedAt))
-        ? inP.completedAt
-        : existing.completedAt;
+      // Kalau hasil akhirnya TIDAK selesai, jam selesai lama ikut dibersihkan supaya
+      // tidak ada pasien aktif yang masih menyimpan jam selesai dari ceklis yang dibatalkan.
+      const completedAt = !isCompleted
+        ? undefined
+        : (inP.completedAt && (!existing.completedAt || new Date(inP.completedAt) >= new Date(existing.completedAt))
+          ? inP.completedAt
+          : existing.completedAt);
 
       patientMap.set(inP.id, {
         ...existing,
         ...inP,
         completed: isCompleted,
+        completionUpdatedAt,
         calledCount,
         lastCalledAt,
         completedAt,
@@ -1508,13 +1550,18 @@ export default function App() {
     if (!target) return;
 
     const willBeCompleted = !target.completed;
+    // Stempel waktu perubahan status ceklis. Ini yang dipakai perangkat lain untuk
+    // memutuskan versi mana yang paling baru, sehingga PEMBATALAN ceklis pun bisa
+    // menular - bukan cuma pencentangannya.
+    const toggledAt = new Date().toISOString();
 
     setPatients(prev => prev.map(p => {
       if (p.id === patientId) {
         return {
           ...p,
           completed: willBeCompleted,
-          completedAt: willBeCompleted ? new Date().toISOString() : undefined
+          completedAt: willBeCompleted ? toggledAt : undefined,
+          completionUpdatedAt: toggledAt
         };
       }
       return p;

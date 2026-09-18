@@ -152,6 +152,10 @@ export interface PatientItem {
   completed: boolean; // Checked state
   createdAt: string; // ISO string
   completedAt?: string; // ISO string
+  // Jam TERAKHIR status ceklis diubah (dicentang MAUPUN dibatalkan). Dipakai saat
+  // menggabungkan data antar perangkat: yang stempelnya paling baru yang menang.
+  // Tanpa ini, pembatalan ceklis tidak pernah bisa menular ke perangkat lain.
+  completionUpdatedAt?: string; // ISO string
   calledCount: number;
   lastCalledAt?: string; // ISO string
   originBoxId?: string; // ID kotak asal sebelum dialihkan ke peralihan siang

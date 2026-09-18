@@ -2244,6 +2244,42 @@ function logNewDeletionsForAudit(existingState: any, incomingPayload: any) {
 }
 
 // Smart State Reconciliation Helper (prevents lost updates when 30+ devices sync simultaneously)
+// Menentukan status ceklis mana yang menang saat dua versi pasien digabungkan.
+// KEMBARAN PERSIS dari pickCompletionState di src/App.tsx - keduanya HARUS memakai
+// aturan yang sama, kalau tidak server dan tablet bisa mengambil kesimpulan berbeda
+// atas kejadian yang sama.
+//
+// Dulu aturannya "sekali selesai, tetap selesai" (operator ATAU). Itu menjaga hal yang
+// nyata: tablet yang lama tertidur lalu bangun membawa data usang tidak boleh
+// menghidupkan kembali pasien yang sudah diceklis petugas lain. Tapi akibatnya
+// PEMBATALAN ceklis tidak pernah bisa menular - status hanya bisa naik, tidak turun.
+//
+// Sekarang pemenangnya ditentukan oleh JAM perubahan (completionUpdatedAt). Data lama
+// yang belum berstempel tetap memakai aturan lama, jadi tidak ada perilaku yang
+// berubah mendadak saat pembaruan ini baru dipasang.
+function pickCompletionState(
+  existing: any,
+  incoming: any
+): { completed: boolean; completionUpdatedAt?: string } {
+  const exMs = existing && existing.completionUpdatedAt ? new Date(existing.completionUpdatedAt).getTime() : NaN;
+  const inMs = incoming && incoming.completionUpdatedAt ? new Date(incoming.completionUpdatedAt).getTime() : NaN;
+  const exValid = !isNaN(exMs);
+  const inValid = !isNaN(inMs);
+
+  if (exValid && inValid) {
+    return inMs >= exMs
+      ? { completed: Boolean(incoming.completed), completionUpdatedAt: incoming.completionUpdatedAt }
+      : { completed: Boolean(existing.completed), completionUpdatedAt: existing.completionUpdatedAt };
+  }
+  if (inValid) {
+    return { completed: Boolean(incoming.completed), completionUpdatedAt: incoming.completionUpdatedAt };
+  }
+  if (exValid) {
+    return { completed: Boolean(existing.completed), completionUpdatedAt: existing.completionUpdatedAt };
+  }
+  return { completed: Boolean((incoming && incoming.completed) || (existing && existing.completed)), completionUpdatedAt: undefined };
+}
+
 function reconcileQueueStates(existingState: any, incomingPayload: any) {
   if (!existingState) existingState = getInitialServerState();
 
@@ -2354,7 +2390,7 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
       });
     } else {
       const wasCompleted = Boolean(existing.completed);
-      const isCompleted = Boolean(inP.completed || existing.completed);
+      const { completed: isCompleted, completionUpdatedAt } = pickCompletionState(existing, inP);
       const calledCount = Math.max(Number(inP.calledCount || 0), Number(existing.calledCount || 0));
 
       const lastCalledAt = inP.lastCalledAt && (!existing.lastCalledAt || new Date(inP.lastCalledAt) >= new Date(existing.lastCalledAt))
@@ -2363,16 +2399,21 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
 
       // Transisi baru menjadi selesai -> pakai jam SERVER, bukan jam device pengirim,
       // supaya respon time (Input -> Ceklis) tidak pernah negatif akibat jam tablet yang salah/mundur.
-      const completedAt = (isCompleted && !wasCompleted)
-        ? new Date().toISOString()
-        : (inP.completedAt && (!existing.completedAt || new Date(inP.completedAt) >= new Date(existing.completedAt))
-          ? inP.completedAt
-          : existing.completedAt);
+      // Kalau hasil akhirnya TIDAK selesai (ceklis dibatalkan), jam selesai lama ikut
+      // dibersihkan - jangan sampai ada pasien aktif yang masih menyimpan jam selesai.
+      const completedAt = !isCompleted
+        ? undefined
+        : (!wasCompleted
+          ? new Date().toISOString()
+          : (inP.completedAt && (!existing.completedAt || new Date(inP.completedAt) >= new Date(existing.completedAt))
+            ? inP.completedAt
+            : existing.completedAt));
 
       patientMap.set(inP.id, {
         ...existing,
         ...inP,
         completed: isCompleted,
+        completionUpdatedAt,
         calledCount,
         lastCalledAt,
         completedAt,
@@ -3285,10 +3326,17 @@ app.post('/api/daily-database/visit', async (req, res) => {
           if (!isDeleted) {
             const existingQueueIdx = currentState.patients.findIndex((p: any) => p.id === updatedVisit.id);
             if (existingQueueIdx >= 0) {
-              currentState.patients[existingQueueIdx] = {
-                ...currentState.patients[existingQueueIdx],
-                ...updatedVisit,
-              };
+              const queuePatient = currentState.patients[existingQueueIdx];
+              // Status ceklis pada antrean AKTIF ditentukan oleh jalur /api/queue yang
+              // membawa stempel waktu (lihat pickCompletionState). Tambalan dari arsip
+              // harian tidak boleh ikut menentukannya - dulu keduanya saling balapan,
+              // dan siapa yang tiba lebih dulu menentukan hasilnya, sehingga pembatalan
+              // ceklis kadang bertahan kadang balik lagi. Kolom lain tetap disinkronkan.
+              // Pasien lama yang belum berstempel tetap memakai perilaku lama.
+              const { completed: _vc, completedAt: _vca, ...visitWithoutCompletion } = updatedVisit as any;
+              currentState.patients[existingQueueIdx] = queuePatient.completionUpdatedAt
+                ? { ...queuePatient, ...visitWithoutCompletion }
+                : { ...queuePatient, ...updatedVisit };
               currentState.lastUpdated = new Date().toISOString();
               saveStateToFile(currentState);
               broadcastUpdate({ type: 'SYNC_STATE', state: currentState });
