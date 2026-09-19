@@ -1055,6 +1055,12 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
       calledAt: p.lastCalledAt || prev.calledAt || null,
       completedAt: p.completedAt || prev.completedAt || null,
       calledCount: p.calledCount !== undefined ? p.calledCount : (prev.calledCount || 0),
+      // Pasien yang MASIH ada di antrean hidup menurut definisinya BELUM ditutup, jadi
+      // penandanya dibersihkan. Ini yang membuat "Restore Antrean" bekerja benar: pasien
+      // yang tadinya dihapus lalu dikembalikan tidak ikut membawa status "dipindahkan"
+      // yang sudah tidak berlaku.
+      endedAt: null,
+      endedReason: undefined,
     });
   });
 
@@ -3562,6 +3568,11 @@ app.post('/api/daily-database/visit', async (req, res) => {
         calledAt: visit.calledAt !== undefined ? visit.calledAt : (prev.calledAt || null),
         completedAt: visit.completedAt !== undefined ? visit.completedAt : (prev.completedAt || null),
         calledCount: visit.calledCount !== undefined ? visit.calledCount : (prev.calledCount || 0),
+        // Penanda kunjungan yang ditutup tanpa pernah diceklis (dipindahkan/dihapus).
+        // Dibangun eksplisit seperti field lain di sini, sebab objek ini disusun
+        // field-per-field - kalau tidak disebut, penandanya akan hilang diam-diam.
+        endedAt: visit.endedAt !== undefined ? visit.endedAt : (prev.endedAt ?? null),
+        endedReason: visit.endedReason !== undefined ? visit.endedReason : prev.endedReason,
       };
 
       if (existingIdx >= 0) {

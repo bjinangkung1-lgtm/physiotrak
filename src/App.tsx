@@ -2017,11 +2017,39 @@ export default function App() {
   };
 
   // Delete Patient
-  const handleDeletePatient = (patientId: string) => {
+  const handleDeletePatient = (
+    patientId: string,
+    endedReason: 'dipindahkan' | 'dihapus' = 'dihapus'
+  ) => {
     hasLocalMutationRef.current = true;
+    const target = patients.find(p => p.id === patientId);
     addLocalTombstone(patientId);
     deletedPatientIdsRef.current.push(patientId);
     setPatients(prev => prev.filter(p => p.id !== patientId));
+
+    // TUTUP catatan kunjungannya di arsip harian.
+    //
+    // Membuang pasien dari antrean hidup saja TIDAK CUKUP. Respon Time membaca arsip
+    // kunjungan, bukan cuma antrean - jadi catatan yang ditinggalkan dengan
+    // completed=false akan terus terhitung sebagai "Sedang Berjalan" selamanya, dan
+    // timernya tidak pernah berhenti. Itulah yang terjadi saat pasien dipindahkan dari
+    // satu terapis ke terapis lain: baris di terapis asal terus berjalan tanpa akhir,
+    // mencemari rata-rata respon time, kepatuhan SPM, dan hitungan pasien aktif.
+    //
+    // Yang ditulis HANYA penanda penutup - bukan completed=true. Terapis asal memang
+    // tidak pernah menuntaskan pasien itu, dan menandainya selesai akan membuat satu
+    // pasien terhitung dua kali di register harian.
+    if (target && target.patientName && target.medicalRecordNo) {
+      databaseService.saveDailyVisit(getLocalDateStringWIB(), {
+        id: patientId,
+        patientName: target.patientName,
+        medicalRecordNo: target.medicalRecordNo,
+        endedAt: new Date().toISOString(),
+        endedReason,
+      }).catch((err) => {
+        console.warn('[Antrean] Gagal menutup catatan kunjungan yang dihapus/dipindahkan:', err);
+      });
+    }
   };
 
   // Meminta konfirmasi password sebelum benar-benar menghapus pasien (mencegah

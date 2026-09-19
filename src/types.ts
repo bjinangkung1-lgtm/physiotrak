@@ -129,10 +129,28 @@ export interface DailyPatientVisit {
   calledAt?: string | null;
   completedAt?: string | null;
   calledCount: number;
+  // Kapan kunjungan ini DITUTUP tanpa pernah diceklis selesai, dan kenapa.
+  //
+  // Dulu tidak ada penanda ini. Saat pasien dipindahkan ke terapis lain lewat
+  // "Pindahkan saja", atau dihapus dari antrean, catatan kunjungannya ditinggalkan
+  // apa adanya dengan completed=false - sehingga Respon Time terus menghitungnya
+  // sebagai pasien yang belum dilayani, selamanya. Timernya tidak pernah berhenti.
+  //
+  // Sengaja TIDAK memakai completed=true: terapis asal memang tidak pernah
+  // menuntaskan pasien itu, dan menandainya selesai akan membuat satu pasien
+  // terhitung dua kali di register harian.
+  //
+  // Opsional, jadi catatan lama yang tidak punya penanda ini berperilaku persis
+  // seperti sebelumnya.
+  endedAt?: string | null;
+  endedReason?: 'dipindahkan' | 'dihapus';
 }
 
 export interface PatientItem {
   id: string;
+  // Penanda kunjungan yang ditutup tanpa diceklis - lihat DailyPatientVisit di atas.
+  endedAt?: string | null;
+  endedReason?: 'dipindahkan' | 'dihapus';
   boxId: string;
   boxTitle?: string; // Judul kotak tempat pasien mengantri
   officerName?: string; // Nama terapis yang sedang / akan menangani

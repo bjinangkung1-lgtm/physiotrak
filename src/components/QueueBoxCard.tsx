@@ -74,7 +74,11 @@ interface QueueBoxCardProps {
   onDeleteBox: (boxId: string, transferTargetBoxId?: string) => void;
   onClearBoxPatients?: (boxId: string) => void;
   onDeletePatient: (patientId: string) => void;
-  onRemovePatientFromBox?: (patientId: string) => void;
+  // Melepas pasien dari kotak TANPA lewat konfirmasi password penghapusan permanen.
+  // Alasan pelepasan ikut dikirim supaya catatan kunjungannya di arsip harian bisa
+  // ditutup dengan benar - tanpa itu, timer Respon Time di terapis asal berjalan
+  // selamanya setelah pasien dipindahkan.
+  onRemovePatientFromBox?: (patientId: string, endedReason?: 'dipindahkan' | 'dihapus') => void;
   onUpdatePatient?: (updatedPatient: PatientItem) => void;
   onEditBox?: (box: QueueBox) => void;
   onOpenPatientQR?: (patient: PatientItem, box: QueueBox) => void;
@@ -2034,7 +2038,7 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
             // kotak tujuan di langkah sebelumnya), jadi TIDAK boleh lewat alur
             // onDeletePatient yang minta password - itu untuk penghapusan permanen.
             if (onRemovePatientFromBox) {
-              onRemovePatientFromBox(pid);
+              onRemovePatientFromBox(pid, 'dipindahkan');
             } else {
               onDeletePatient(pid);
             }

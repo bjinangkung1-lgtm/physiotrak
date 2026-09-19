@@ -150,6 +150,11 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
         lastCalledAt: v.calledAt || null,
         completedAt: v.completedAt || null,
         calledCount: v.calledCount || 0,
+        // Penanda kunjungan yang ditutup tanpa diceklis (dipindahkan/dihapus). WAJIB
+        // ikut dibawa - objek ini disusun field-per-field, jadi kalau tidak disebut
+        // penandanya hilang dan timernya kembali berjalan selamanya.
+        endedAt: (v as any).endedAt || null,
+        endedReason: (v as any).endedReason,
       };
       (unified as any).boxTitle = v.boxTitle;
       (unified as any).officerName = v.officerName;
@@ -202,8 +207,8 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
   // Filter patient metrics for detailed table
   const filteredPatients = analytics.patientMetrics.filter((p) => {
     if (filterBoxId !== 'all' && p.boxId !== filterBoxId) return false;
-    if (filterStatus === 'waiting' && p.completed) return false;
-    if (filterStatus === 'delayed' && p.waitMinutes <= 30) return false;
+    if (filterStatus === 'waiting' && (p.completed || p.isEnded)) return false;
+    if (filterStatus === 'delayed' && (p.waitMinutes <= 30 || p.isEnded)) return false;
     if (filterStatus === 'completed' && !p.completed) return false;
 
     if (searchQuery.trim()) {
@@ -930,6 +935,15 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
                               ) : p.completed ? (
                                 <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold text-[10px]">
                                   Selesai
+                                </span>
+                              ) : p.isEnded ? (
+                                <span
+                                  className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded font-bold text-[10px]"
+                                  title={p.endedReason === 'dipindahkan'
+                                    ? 'Pasien dipindahkan ke terapis lain - timer dihentikan di jam pemindahan dan tidak ikut dihitung dalam rata-rata maupun SPM'
+                                    : 'Pasien dihapus dari antrean - timer dihentikan di jam penghapusan'}
+                                >
+                                  {p.endedReason === 'dipindahkan' ? 'Dipindahkan' : 'Dihapus'}
                                 </span>
                               ) : (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded font-bold text-[10px]">
