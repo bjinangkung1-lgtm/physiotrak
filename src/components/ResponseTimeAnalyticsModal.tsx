@@ -42,7 +42,9 @@ interface ResponseTimeAnalyticsModalProps {
   patients: PatientItem[];
   callLogs?: CallHistoryRecord[];
   onCallPatient?: (patient: PatientItem, box: QueueBox) => void;
-  onSelectBoxFilter?: (boxTitleOrId: string) => void;
+  // WAJIB berupa ID kotak (mis. 'box-gunandar'), BUKAN judulnya. Penerima di App.tsx
+  // mencocokkannya dengan box.id - kalau diberi judul, kotaknya tidak akan pernah ketemu.
+  onSelectBoxFilter?: (boxId: string) => void;
 }
 
 export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProps> = ({
@@ -784,7 +786,7 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
                           {onSelectBoxFilter && (
                             <button
                               onClick={() => {
-                                onSelectBoxFilter(b.boxTitle);
+                                onSelectBoxFilter(b.boxId);
                                 onClose();
                               }}
                               className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[11px] font-bold transition-all cursor-pointer"

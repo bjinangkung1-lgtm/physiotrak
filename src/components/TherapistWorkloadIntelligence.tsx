@@ -41,7 +41,9 @@ export interface TherapistWorkloadStats {
 interface TherapistWorkloadIntelligenceProps {
   boxes: QueueBox[];
   patients: PatientItem[];
-  onSelectBoxFilter?: (boxTitleOrId: string) => void;
+  // WAJIB berupa ID kotak (mis. 'box-gunandar'), BUKAN judulnya. Penerima di App.tsx
+  // mencocokkannya dengan box.id - kalau diberi judul, kotaknya tidak akan pernah ketemu.
+  onSelectBoxFilter?: (boxId: string) => void;
   onCallNextInBox?: (box: QueueBox) => void;
   onOpenAddPatientToBox?: (boxId: string) => void;
 }
@@ -345,7 +347,7 @@ export const TherapistWorkloadIntelligence: React.FC<TherapistWorkloadIntelligen
                 {onSelectBoxFilter && (
                   <button
                     type="button"
-                    onClick={() => onSelectBoxFilter(t.boxTitle)}
+                    onClick={() => onSelectBoxFilter(t.boxId)}
                     className="mt-2 w-full py-1 text-center text-[10px] font-bold text-slate-600 hover:text-teal-700 hover:bg-white rounded border border-slate-200 transition-all cursor-pointer flex items-center justify-center gap-1"
                   >
                     <Filter className="w-2.5 h-2.5" />
@@ -526,7 +528,7 @@ export const TherapistWorkloadIntelligence: React.FC<TherapistWorkloadIntelligen
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    onSelectBoxFilter(t.boxTitle);
+                                    onSelectBoxFilter(t.boxId);
                                     setIsDetailModalOpen(false);
                                   }}
                                   className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[11px] font-bold cursor-pointer transition-all"
