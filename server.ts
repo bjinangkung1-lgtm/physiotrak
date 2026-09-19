@@ -1816,6 +1816,84 @@ function dailyArchiveMonthDocRef(monthKey: string) {
   return doc(serverFirestoreDb, DAILY_ARCHIVE_MONTHS_COLLECTION, monthKey);
 }
 
+// Cadangan PER TANGGAL - satu dokumen untuk satu hari.
+//
+// KENAPA ADA DUA BENTUK CADANGAN:
+// Dokumen per-bulan menyimpan seluruh tanggal dalam satu dokumen, jadi menulisnya
+// sama saja dengan menyatakan "inilah SELURUH tanggal bulan ini". Satu instance yang
+// datanya kurang lengkap otomatis menghapus tanggal yang tidak dia punya - persis yang
+// terjadi 19 September 2026 pukul 11.17 WIB, dua hari kunjungan lenyap sekaligus.
+//
+// Bentuk per-tanggal tidak punya sifat itu. Menulis dokumen 2026-09-19 tidak
+// mengatakan apa pun tentang 2026-09-18. Tanggal yang tidak dipunyai sebuah instance
+// sama sekali tidak tersentuh olehnya - tidak bisa dirusak karena tidak pernah ditulis.
+// Kerusakan terparah dari satu penulisan yang salah jadi terbatas pada SATU HARI.
+//
+// Keduanya tetap ditulis dengan sengaja. Dua salinan berbentuk berbeda di tempat
+// berbeda; kalau salah satu jalur bermasalah, satunya lagi masih utuh. Pemulihan saat
+// server menyala membaca dua-duanya lalu menggabungkannya.
+const DAILY_ARCHIVE_DAYS_COLLECTION = 'daily_archive_days';
+function dailyArchiveDayDocRef(dateKey: string) {
+  return doc(serverFirestoreDb, DAILY_ARCHIVE_DAYS_COLLECTION, dateKey);
+}
+
+// Sidik isi tanggal yang terakhir berhasil dicadangkan instance ini, supaya tanggal
+// yang tidak berubah tidak ditulis ulang. Inilah yang membuat hari-hari yang sudah
+// lewat praktis membeku: begitu tercadangkan dan tidak ada perubahan, ia tidak pernah
+// disentuh lagi sepanjang instance ini hidup.
+const sidikTanggalTercadangkan = new Map<string, string>();
+
+function sidikKunjungan(visits: any[]): string {
+  if (!Array.isArray(visits)) return '0';
+  return visits.length + ':' + visits.map((v: any) => v && v.id).sort().join(',');
+}
+
+// Menyatukan dua daftar kunjungan pada SATU tanggal berdasarkan id.
+function mergeVisitsById(base: any[], incoming: any[]): any[] {
+  const map = new Map<string, any>();
+  (Array.isArray(base) ? base : []).forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
+  (Array.isArray(incoming) ? incoming : []).forEach((v: any) => {
+    if (v && v.id) map.set(v.id, { ...map.get(v.id), ...v });
+  });
+  return Array.from(map.values());
+}
+
+// Mencadangkan satu tanggal ke dokumennya sendiri. Dibaca dulu lalu digabung, supaya
+// instance yang salinan harinya tertinggal tidak mengurangi isi yang sudah tersimpan.
+// Mengembalikan true kalau tanggal itu aman tercadangkan.
+async function mirrorSatuTanggal(dateKey: string, visits: any[]): Promise<boolean> {
+  try {
+    let existing: any[] = [];
+    try {
+      const snap = await getDoc(dailyArchiveDayDocRef(dateKey));
+      if (snap.exists()) {
+        const d = snap.data();
+        if (Array.isArray(d?.visits)) existing = d.visits;
+      }
+    } catch (readErr: any) {
+      if (handleFirestoreQuotaError(readErr, 'DailyArchiveDay-Read')) return false;
+      console.warn(`[DailyArchiveDay] Tidak bisa membaca cadangan tanggal ${dateKey}, penulisan dilewati agar tidak mengurangi isinya.`);
+      return false;
+    }
+
+    const gabung = mergeVisitsById(existing, Array.isArray(visits) ? visits : []);
+    if (gabung.length < existing.length) {
+      console.warn(`[DailyArchiveDay] Penulisan ${dateKey} dibatalkan: hasil gabungan (${gabung.length}) lebih sedikit dari yang tersimpan (${existing.length}).`);
+      return false;
+    }
+
+    await setDoc(dailyArchiveDayDocRef(dateKey), {
+      dateKey,
+      visits: JSON.parse(JSON.stringify(gabung)),
+      lastMirroredAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (err: any) {
+    handleFirestoreQuotaError(err, 'DailyArchiveDay');
+    return false;
+  }
+}
+
 const dailyArchiveMirrorDebounceTimers = new Map<string, NodeJS.Timeout>();
 const dailyArchiveMirrorMaxWaitTimers = new Map<string, NodeJS.Timeout>();
 const pendingDailyArchiveMirrors = new Map<string, Record<string, any[]>>();
@@ -1914,6 +1992,20 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
       }
     }
 
+    // Cadangan PER TANGGAL dulu, baru yang per-bulan. Bentuk per-tanggal yang lebih
+    // aman didahulukan supaya kalau penulisan per-bulan gagal, salinan hariannya sudah
+    // mendarat. Yang ditulis HANYA tanggal yang benar-benar dipunyai instance ini
+    // (ada di sanitized) DAN isinya berubah sejak terakhir tercadangkan - jadi hari
+    // yang sudah lewat tidak pernah ditulis ulang tanpa alasan.
+    for (const dateKey of Object.keys(sanitized)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+      const isiTanggal = Array.isArray(merged[dateKey]) ? merged[dateKey] : sanitized[dateKey];
+      const sidik = sidikKunjungan(isiTanggal);
+      if (sidikTanggalTercadangkan.get(dateKey) === sidik) continue;
+      const berhasil = await mirrorSatuTanggal(dateKey, isiTanggal);
+      if (berhasil) sidikTanggalTercadangkan.set(dateKey, sidik);
+    }
+
     await setDoc(dailyArchiveMonthDocRef(monthKey), { archive: merged, lastMirroredAt: new Date().toISOString() });
 
     // Simpan hasil gabungan ke disk lokal juga (TANPA memicu pencadangan lagi), supaya
@@ -1981,6 +2073,35 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
       });
     } catch (err) {
       console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive_months:', err);
+    }
+
+    // 1b. Tarik juga cadangan PER TANGGAL lalu gabungkan. Bentuk ini lebih tahan
+    // terhadap penulisan yang tidak lengkap, jadi ia yang paling mungkin menyimpan
+    // hari-hari terakhir dengan utuh. Digabung, bukan menimpa - sama seperti di atas.
+    try {
+      const daySnapshot = await getDocs(collection(serverFirestoreDb, DAILY_ARCHIVE_DAYS_COLLECTION));
+      const perBulan = new Map<string, Record<string, any[]>>();
+      daySnapshot.forEach((docSnap) => {
+        const dateKey = docSnap.id;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+        const visits = docSnap.data()?.visits;
+        if (!Array.isArray(visits) || visits.length === 0) return;
+        const monthKey = dateKey.slice(0, 7);
+        const bucket = perBulan.get(monthKey) || {};
+        bucket[dateKey] = visits;
+        perBulan.set(monthKey, bucket);
+      });
+      perBulan.forEach((isi, monthKey) => {
+        const lokal = loadArchiveMonth(monthKey);
+        const gabung = mergeArchiveMonths(lokal, isi);
+        if (JSON.stringify(gabung) !== JSON.stringify(lokal)) {
+          saveArchiveMonthLocalOnly(monthKey, gabung);
+          console.log(`[FirestoreHydrate] Cadangan per-tanggal melengkapi ${monthKey} menjadi ${Object.keys(gabung).length} tanggal.`);
+        }
+        totalDates = Math.max(totalDates, Object.keys(gabung).length);
+      });
+    } catch (err) {
+      console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive_days:', err);
     }
 
     // 2. Fallback ke dokumen tunggal lama (kalau instance ini belum pernah jalan
