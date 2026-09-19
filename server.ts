@@ -1820,6 +1820,33 @@ const dailyArchiveMirrorDebounceTimers = new Map<string, NodeJS.Timeout>();
 const dailyArchiveMirrorMaxWaitTimers = new Map<string, NodeJS.Timeout>();
 const pendingDailyArchiveMirrors = new Map<string, Record<string, any[]>>();
 
+// Menyatukan dua versi arsip satu bulan. Tanggal yang hanya ada di salah satu sisi
+// TETAP IKUT; untuk tanggal yang ada di dua-duanya, kunjungan disatukan per id dan
+// versi yang masuk (dari disk instance ini) menang per-field.
+//
+// Aman dilakukan karena arsip harian TIDAK PERNAH menghapus kunjungan - ketiga jalur
+// penulisannya (endpoint /visit, /batch, dan penyelarasan antrean) semuanya hanya
+// menambah atau memperbarui berdasarkan id. Jadi penggabungan ini tidak bisa
+// menghidupkan kembali sesuatu yang sengaja dihapus, karena memang tidak ada
+// mekanisme penghapusan yang perlu dihormati.
+function mergeArchiveMonths(base: any, incoming: any): Record<string, any[]> {
+  const out: Record<string, any[]> = {};
+  const tanggal = new Set<string>([
+    ...Object.keys(base && typeof base === 'object' ? base : {}),
+    ...Object.keys(incoming && typeof incoming === 'object' ? incoming : {}),
+  ]);
+  tanggal.forEach((d) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+    const map = new Map<string, any>();
+    const sisiLama = Array.isArray(base?.[d]) ? base[d] : [];
+    const sisiBaru = Array.isArray(incoming?.[d]) ? incoming[d] : [];
+    sisiLama.forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
+    sisiBaru.forEach((v: any) => { if (v && v.id) map.set(v.id, { ...map.get(v.id), ...v }); });
+    out[d] = Array.from(map.values());
+  });
+  return out;
+}
+
 async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
   const existingTimer = dailyArchiveMirrorDebounceTimers.get(monthKey);
   if (existingTimer) clearTimeout(existingTimer);
@@ -1832,11 +1859,79 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
   const current = pendingDailyArchiveMirrors.get(monthKey);
   pendingDailyArchiveMirrors.delete(monthKey);
   if (!current) return;
+
+  // Menunda pencadangan tanpa membuang datanya: dikembalikan ke antrean lalu dicoba
+  // lagi sebentar kemudian. Dipakai kalau kita TIDAK BISA memastikan isi cadangan
+  // yang sekarang - lebih baik telat mencadangkan daripada menimpa data yang baik.
+  const tundaDanCobaLagi = (alasan: string) => {
+    const tertunda = pendingDailyArchiveMirrors.get(monthKey);
+    pendingDailyArchiveMirrors.set(monthKey, tertunda ? mergeArchiveMonths(current, tertunda) : current);
+    console.warn(`[DailyArchiveMirror] ${alasan} - pencadangan arsip ${monthKey} DITUNDA, data lokal tidak dibuang dan akan dicoba lagi.`);
+    if (!dailyArchiveMirrorDebounceTimers.has(monthKey)) {
+      dailyArchiveMirrorDebounceTimers.set(monthKey, setTimeout(() => { void flushArchiveMonthMirrorNow(monthKey); }, 30000));
+    }
+  };
+
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
-    await setDoc(dailyArchiveMonthDocRef(monthKey), { archive: sanitized, lastMirroredAt: new Date().toISOString() });
+
+    // Baca dulu apa yang SUDAH ada di cadangan, lalu gabungkan.
+    //
+    // KENAPA: setDoc menimpa dokumen secara utuh. Sebelumnya isi disk instance ini
+    // langsung ditulis apa adanya, sehingga instance yang kebetulan datanya belum
+    // lengkap - misalnya wadah baru yang pemulihannya tidak sempat/tidak penuh -
+    // MENGHAPUS tanggal-tanggal yang sebenarnya masih tersimpan di cadangan. Persis
+    // itu yang terjadi pada 19 September 2026 pukul 11.17 WIB: dokumen bulan September
+    // ditimpa salinan yang hanya berisi sampai 17 September, dan kunjungan dua hari
+    // hilang tanpa jejak. Sejak sekarang penulisan hanya boleh MENAMBAH.
+    let cloudArchive: any = null;
+    try {
+      const snapshot = await getDoc(dailyArchiveMonthDocRef(monthKey));
+      cloudArchive = snapshot.exists() ? snapshot.data()?.archive : null;
+    } catch (readErr: any) {
+      if (handleFirestoreQuotaError(readErr, 'DailyArchiveMirror-Read')) return;
+      tundaDanCobaLagi('Tidak bisa membaca cadangan yang sekarang');
+      return;
+    }
+
+    const merged = (cloudArchive && typeof cloudArchive === 'object')
+      ? mergeArchiveMonths(cloudArchive, sanitized)
+      : sanitized;
+
+    // Penjaga terakhir: kalau karena alasan apa pun hasil gabungan justru KEHILANGAN
+    // tanggal yang sudah ada di cadangan, batalkan. Dengan penggabungan di atas ini
+    // seharusnya mustahil - justru itu gunanya, supaya kekeliruan di kemudian hari
+    // tertahan di sini, bukan diketahui setelah data hilang.
+    if (cloudArchive && typeof cloudArchive === 'object') {
+      const hilang = Object.keys(cloudArchive).filter(
+        (d) => /^\d{4}-\d{2}-\d{2}$/.test(d)
+          && Array.isArray(cloudArchive[d]) && cloudArchive[d].length > 0
+          && (!Array.isArray(merged[d]) || merged[d].length === 0)
+      );
+      if (hilang.length > 0) {
+        tundaDanCobaLagi(`Penulisan dibatalkan karena akan menghilangkan tanggal: ${hilang.join(', ')}`);
+        return;
+      }
+    }
+
+    await setDoc(dailyArchiveMonthDocRef(monthKey), { archive: merged, lastMirroredAt: new Date().toISOString() });
+
+    // Simpan hasil gabungan ke disk lokal juga (TANPA memicu pencadangan lagi), supaya
+    // instance yang tadinya datanya belum lengkap ikut lengkap setelah satu putaran.
+    try {
+      const lokal = loadArchiveMonth(monthKey);
+      const lokalGabung = mergeArchiveMonths(lokal, merged);
+      if (JSON.stringify(lokalGabung) !== JSON.stringify(lokal)) {
+        saveArchiveMonthLocalOnly(monthKey, lokalGabung);
+        console.log(`[DailyArchiveMirror] Disk lokal ikut dilengkapi dari cadangan untuk ${monthKey}.`);
+      }
+    } catch (localErr) {
+      console.warn('[DailyArchiveMirror] Gagal melengkapi disk lokal:', localErr);
+    }
   } catch (err: any) {
-    handleFirestoreQuotaError(err, 'DailyArchiveMirror');
+    if (!handleFirestoreQuotaError(err, 'DailyArchiveMirror')) {
+      tundaDanCobaLagi('Penulisan cadangan gagal');
+    }
   }
 }
 
@@ -1862,12 +1957,12 @@ async function mirrorArchiveMonthToFirestore(monthKey: string, data: Record<stri
 
 async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
   try {
-    // Kalau disk lokal sudah punya isi (minimal 1 bulan dengan minimal 1 tanggal),
-    // anggap sudah terpulihkan - tidak perlu tarik dari cloud lagi.
-    const localMonthKeys = listArchiveMonthKeys();
-    const hasLocalData = localMonthKeys.some((mk) => Object.keys(loadArchiveMonth(mk)).length > 0);
-    if (hasLocalData) return;
-
+    // Dulu di sini ada pintasan: "kalau disk lokal sudah punya isi, jangan tarik dari
+    // cloud". Pintasan itu berbahaya. Instance yang datanya cuma sebagian - misalnya
+    // baru sempat mencatat satu kunjungan hari ini - dianggap sudah lengkap, tidak
+    // pernah menarik sisanya, lalu penulisan berikutnya MENIMPA cadangan dengan
+    // isinya yang bolong. Sekarang cadangan SELALU ditarik lalu DIGABUNG dengan yang
+    // ada di disk, jadi instance ini tidak mungkin lagi punya gambaran yang kurang.
     let totalDates = 0;
 
     // 1. Coba pulihkan dari koleksi per-bulan (format baru)
@@ -1876,8 +1971,12 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
       snapshot.forEach((docSnap) => {
         const archive = docSnap.data()?.archive;
         if (archive && typeof archive === 'object' && Object.keys(archive).length > 0) {
-          saveArchiveMonthLocalOnly(docSnap.id, archive);
-          totalDates += Object.keys(archive).length;
+          const lokal = loadArchiveMonth(docSnap.id);
+          const gabung = mergeArchiveMonths(lokal, archive);
+          if (JSON.stringify(gabung) !== JSON.stringify(lokal)) {
+            saveArchiveMonthLocalOnly(docSnap.id, gabung);
+          }
+          totalDates += Object.keys(gabung).length;
         }
       });
     } catch (err) {
@@ -1892,8 +1991,11 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
         if (legacySnapshot.exists()) {
           const legacyArchive = legacySnapshot.data()?.archive;
           if (legacyArchive && typeof legacyArchive === 'object' && Object.keys(legacyArchive).length > 0) {
-            saveFullDailyArchive(legacyArchive);
-            totalDates = Object.keys(legacyArchive).length;
+            // Digabung dengan yang sudah ada di disk, bukan ditimpa - alasan sama
+            // seperti di jalur per-bulan di atas.
+            const gabungLegacy = mergeArchiveMonths(loadFullDailyArchive(), legacyArchive);
+            saveFullDailyArchive(gabungLegacy);
+            totalDates = Object.keys(gabungLegacy).length;
           }
         }
       } catch (err) {
