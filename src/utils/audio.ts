@@ -1,7 +1,96 @@
 /**
  * Hospital Notification Chimes Engine
  * Uses Web Audio API oscillator nodes for lightweight, zero-dependency audible feedback.
+ *
+ * CATATAN PENTING soal Safari (iPhone/iPad):
+ * Versi sebelumnya membuat AudioContext BARU setiap kali suara dibunyikan dan tidak
+ * pernah menutupnya. Di Chrome desktop itu hanya boros. Di WebKit (semua peramban di
+ * iPhone/iPad, termasuk Chrome versi iOS) ada dua akibat nyata:
+ *   1. iOS membatasi jumlah AudioContext yang hidup bersamaan. Setelah beberapa kali
+ *      berbunyi, pembuatan berikutnya gagal diam-diam - suara berhenti di iPhone
+ *      padahal di komputer tetap normal.
+ *   2. AudioContext yang dibuat di luar sentuhan pengguna lahir dalam keadaan
+ *      "suspended", dan iOS menolak resume() kalau belum pernah ada sentuhan. Karena
+ *      context lama dibuang setiap kali, ia tidak pernah sempat "terbuka".
+ *
+ * Perbaikannya: SATU AudioContext dipakai bersama seumur halaman, lalu dibuka sekali
+ * pada sentuhan/ketikan pertama pengguna. Nada, tempo, dan volume TIDAK diubah sama
+ * sekali - semua penjadwalan tetap relatif terhadap ctx.currentTime yang dibaca ulang
+ * setiap panggilan, jadi bunyinya persis sama seperti sebelumnya.
  */
+
+type AudioContextCtor = typeof window.AudioContext;
+
+let sharedCtx: AudioContext | null = null;
+let unlockTerpasang = false;
+
+function getAudioContextCtor(): AudioContextCtor | null {
+  if (typeof window === 'undefined') return null;
+  return (
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: AudioContextCtor }).webkitAudioContext ||
+    null
+  );
+}
+
+/**
+ * Mengembalikan AudioContext bersama, membuatnya kalau belum ada.
+ * Context yang sudah 'closed' tidak bisa dipakai lagi, jadi diganti yang baru.
+ */
+function getSharedContext(): AudioContext | null {
+  const Ctor = getAudioContextCtor();
+  if (!Ctor) return null;
+
+  if (sharedCtx && sharedCtx.state === 'closed') {
+    sharedCtx = null;
+  }
+
+  if (!sharedCtx) {
+    try {
+      sharedCtx = new Ctor();
+    } catch (err) {
+      console.warn('Web Audio tidak tersedia:', err);
+      return null;
+    }
+  }
+
+  return sharedCtx;
+}
+
+/**
+ * Memasang pendengar sentuhan sekali saja. iOS hanya mengizinkan membuka audio di
+ * dalam penanganan sentuhan pengguna yang sesungguhnya.
+ *
+ * Pendengar ini SENGAJA tidak dilepas setelah berhasil: iOS menidurkan kembali
+ * AudioContext setiap kali aplikasi berpindah ke latar belakang atau layar terkunci,
+ * jadi ia perlu dibuka lagi pada sentuhan berikutnya. Semuanya pasif dan hanya
+ * memeriksa satu keadaan, jadi tidak mengganggu sentuhan apa pun di aplikasi.
+ */
+function pasangPembukaAudio() {
+  if (unlockTerpasang) return;
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  unlockTerpasang = true;
+
+  const buka = () => {
+    // Membuat context di dalam sentuhan pengguna adalah jalur yang direstui iOS.
+    const ctx = getSharedContext();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  };
+
+  (['pointerdown', 'touchend', 'keydown'] as const).forEach((evt) => {
+    try {
+      document.addEventListener(evt, buka, { passive: true });
+    } catch {
+      // Peramban sangat lama tidak mengenal opsi passive - abaikan saja.
+    }
+  });
+}
+
+// Dipasang saat modul dimuat, supaya sentuhan pertama pengguna (misalnya mengetik
+// kata sandi saat masuk) sudah membuka audio jauh sebelum ada bunyi yang diminta.
+pasangPembukaAudio();
 
 /**
  * Play gentle hospital chime tones
@@ -13,13 +102,14 @@ export function playChimeSound(type: 'call' | 'new-patient' | 'success' | 'warni
         resolve();
         return;
       }
-      const AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof window.AudioContext }).webkitAudioContext;
-      if (!AudioContext) {
+
+      const ctx = getSharedContext();
+      if (!ctx) {
         resolve();
         return;
       }
+      pasangPembukaAudio();
 
-      const ctx = new AudioContext();
       if (ctx.state === 'suspended') {
         ctx.resume().catch(() => {});
       }

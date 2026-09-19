@@ -3,6 +3,7 @@ import { QueueBox, PatientItem, CallHistoryRecord, BoxColor, AppNotification, Da
 import { INITIAL_BOXES, INITIAL_PATIENTS, INITIAL_CALL_HISTORY } from './data/initialData';
 import { getLocalDateStringWIB } from './utils/dateHelper';
 import { playChimeSound } from './utils/audio';
+import { safeLocalSet } from './utils/safeStorage';
 import { Header } from './components/Header';
 import { CommunicationBoard } from './components/CommunicationBoard';
 import { QueueBoxCard } from './components/QueueBoxCard';
@@ -204,7 +205,7 @@ export function createLocalTombstoneStore(storageKey: string, maxItems: number =
       const set = getTombstones();
       set.add(id);
       const arr = Array.from(set).slice(-maxItems);
-      localStorage.setItem(storageKey, JSON.stringify(arr));
+      safeLocalSet(storageKey, JSON.stringify(arr));
     } catch {}
   };
 
@@ -276,7 +277,7 @@ export function shouldApplyResetEvent(payload: any): boolean {
 export function rememberResetApplied(lastResetAt?: string | null) {
   if (!lastResetAt) return;
   try {
-    localStorage.setItem(LAST_RESET_AT_KEY, lastResetAt);
+    safeLocalSet(LAST_RESET_AT_KEY, lastResetAt);
   } catch {
     // ignore
   }
@@ -490,7 +491,7 @@ export default function App() {
   });
   useEffect(() => {
     try {
-      localStorage.setItem('antrian_communication_notes', JSON.stringify(communicationNotes));
+      safeLocalSet('antrian_communication_notes', JSON.stringify(communicationNotes));
     } catch {
       // ignore
     }
@@ -663,7 +664,7 @@ export default function App() {
     const ts = new Date().toISOString();
     boxOrderUpdatedAtRef.current = ts;
     try {
-      localStorage.setItem('antrian_box_order_updated_at', ts);
+      safeLocalSet('antrian_box_order_updated_at', ts);
     } catch {}
   };
 
@@ -674,7 +675,7 @@ export default function App() {
     if (!isNaN(incomingTs) && incomingTs > currentTs) {
       boxOrderUpdatedAtRef.current = incomingWatermark;
       try {
-        localStorage.setItem('antrian_box_order_updated_at', incomingWatermark);
+        safeLocalSet('antrian_box_order_updated_at', incomingWatermark);
       } catch {}
     }
   };
@@ -731,7 +732,7 @@ export default function App() {
 
       const reordered = newBoxes.map((b, idx) => ({ ...b, order: idx }));
       try {
-        localStorage.setItem('antrian_boxes', JSON.stringify(reordered));
+        safeLocalSet('antrian_boxes', JSON.stringify(reordered));
       } catch (e) {
         console.warn('Failed to save reordered boxes to localStorage:', e);
       }
@@ -778,7 +779,7 @@ export default function App() {
 
       const reordered = combined.map((b, idx) => ({ ...b, order: idx }));
       try {
-        localStorage.setItem('antrian_boxes', JSON.stringify(reordered));
+        safeLocalSet('antrian_boxes', JSON.stringify(reordered));
       } catch (e) {
         console.warn('Failed to save reordered boxes to localStorage:', e);
       }
@@ -794,7 +795,7 @@ export default function App() {
     setBoxes(newBoxes);
     hasLocalMutationRef.current = true;
     try {
-      localStorage.setItem('antrian_boxes', JSON.stringify(newBoxes));
+      safeLocalSet('antrian_boxes', JSON.stringify(newBoxes));
     } catch (e) {
       console.warn('Failed to save reordered boxes to localStorage:', e);
     }
@@ -1058,7 +1059,7 @@ export default function App() {
 
       if (Array.isArray(syncData.savedOfficers) && syncData.savedOfficers.length > 0) {
         try {
-          localStorage.setItem('antrian_irm_saved_officers_v1', JSON.stringify(syncData.savedOfficers));
+          safeLocalSet('antrian_irm_saved_officers_v1', JSON.stringify(syncData.savedOfficers));
         } catch {
           // ignore
         }
@@ -1283,7 +1284,7 @@ export default function App() {
             knownPatientIdsRef.current.clear();
             validServerPatients.forEach((p: PatientItem) => knownPatientIdsRef.current.add(p.id));
             setPatients(validServerPatients);
-            localStorage.setItem('antrian_patients', JSON.stringify(validServerPatients));
+            safeLocalSet('antrian_patients', JSON.stringify(validServerPatients));
           }
 
           if (Array.isArray(data.state.callLogs) && data.state.callLogs.length > 0) {
@@ -1302,7 +1303,7 @@ export default function App() {
 
           if (Array.isArray(data.state.savedOfficers) && data.state.savedOfficers.length > 0) {
             try {
-              localStorage.setItem('antrian_irm_saved_officers_v1', JSON.stringify(data.state.savedOfficers));
+              safeLocalSet('antrian_irm_saved_officers_v1', JSON.stringify(data.state.savedOfficers));
             } catch {
               // ignore
             }
@@ -1364,10 +1365,10 @@ export default function App() {
 
   // Broadcast local changes to all connected devices ONLY when triggered locally AND after hydration
   useEffect(() => {
-    localStorage.setItem('antrian_boxes', JSON.stringify(boxes));
-    localStorage.setItem('antrian_patients', JSON.stringify(patients));
-    localStorage.setItem('antrian_ranap_queue', JSON.stringify(ranapQueue));
-    localStorage.setItem('antrian_call_logs', JSON.stringify(callLogs));
+    safeLocalSet('antrian_boxes', JSON.stringify(boxes));
+    safeLocalSet('antrian_patients', JSON.stringify(patients));
+    safeLocalSet('antrian_ranap_queue', JSON.stringify(ranapQueue));
+    safeLocalSet('antrian_call_logs', JSON.stringify(callLogs));
 
     // CRITICAL FIX: Do NOT broadcast to backend if we haven't completed initial hydration or if no local user mutation occurred!
     if (!isHydratedRef.current) {
@@ -1441,7 +1442,7 @@ export default function App() {
     setRanapQueue(prev => {
       const updated = [...prev, newRanapItem].sort((a, b) => compareRoomNumbers(a.roomNumber, b.roomNumber));
       try {
-        localStorage.setItem('antrian_ranap_queue', JSON.stringify(updated));
+        safeLocalSet('antrian_ranap_queue', JSON.stringify(updated));
       } catch {}
       return updated;
     });
@@ -1469,7 +1470,7 @@ export default function App() {
     setRanapQueue(prev => {
       const updated = prev.filter(r => r.id !== id);
       try {
-        localStorage.setItem('antrian_ranap_queue', JSON.stringify(updated));
+        safeLocalSet('antrian_ranap_queue', JSON.stringify(updated));
       } catch {}
       return updated;
     });
@@ -1484,7 +1485,7 @@ export default function App() {
     setRanapQueue(prev => {
       const updated = prev.filter(r => r.id !== id);
       try {
-        localStorage.setItem('antrian_ranap_queue', JSON.stringify(updated));
+        safeLocalSet('antrian_ranap_queue', JSON.stringify(updated));
       } catch {}
       return updated;
     });
@@ -2312,7 +2313,7 @@ export default function App() {
     localStorage.removeItem('antrian_patients');
     localStorage.removeItem('antrian_call_logs');
     try {
-      localStorage.setItem('antrian_last_reset_at', resetTimestamp);
+      safeLocalSet('antrian_last_reset_at', resetTimestamp);
     } catch {
       // ignore
     }
