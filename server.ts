@@ -1585,9 +1585,19 @@ function loadStateFromFile() {
           const deletedBoxIdSet = new Set(Array.isArray(parsed.deletedBoxIds) ? parsed.deletedBoxIds : []);
           const missingBoxes = initial.boxes.filter((b: any) => !existingIds.has(b.id) && !deletedBoxIdSet.has(b.id));
           if (missingBoxes.length > 0) {
+            // HANYA menyimpan kalau memang ada yang berubah (kotak bawaan yang hilang
+            // dikembalikan). Sebelumnya penyimpanan ini berada DI LUAR pengecekan,
+            // sehingga SETIAP KALI state dibaca - termasuk sekadar menampilkan antrean -
+            // ikut mencadangkan ke Cloud Firestore. Dua akibatnya:
+            //   1. Kalau instance baru menyala dengan state bawaan (0 pasien) karena
+            //      pengambilan cadangan gagal, pembacaan pertama langsung MENIMPA
+            //      cadangan yang masih berisi pasien sungguhan.
+            //   2. Kuota Firestore terpakai untuk penulisan yang tidak mengubah apa pun.
+            // Membaca tidak boleh menulis - penyimpanan hanya dilakukan saat ada
+            // perubahan nyata, seperti semua jalur lain di server ini.
             parsed.boxes = [...parsed.boxes, ...missingBoxes];
+            saveStateToFile(parsed);
           }
-          saveStateToFile(parsed);
         }
         return parsed;
       }
@@ -1596,9 +1606,30 @@ function loadStateFromFile() {
     console.error('Error reading DB_FILE:', err);
   }
 
-  // Initialize file with default state
+  // Sampai di sini artinya file state tidak ada atau rusak, jadi kita terpaksa memulai
+  // dari state bawaan (25 kotak terapis, TANPA satu pun pasien).
+  //
+  // PENTING: state bawaan ini ditulis ke disk LOKAL SAJA, JANGAN dicadangkan ke Cloud
+  // Firestore. Alasannya: keadaan ini juga terjadi saat sebuah instance baru menyala
+  // tapi pengambilan cadangan gagal (gangguan jaringan sesaat / kuota Firestore habis).
+  // Kalau state bawaan yang kosong itu ikut tercadangkan, ia akan MENIMPA cadangan yang
+  // masih berisi pasien sungguhan - dan sesudah itu tidak ada lagi tempat memulihkannya.
+  // Bentuknya pun terlihat "sah" (kotak-kotaknya lengkap, cuma nol pasien), jadi tidak
+  // ada yang menandainya sebagai data rusak.
+  //
+  // Dengan cadangan dibiarkan utuh, instance ini akan pulih sendiri: sinkronisasi
+  // periodik menarik kembali pasien dari cadangan, atau perangkat yang mengirim datanya
+  // akan mengisinya lewat penggabungan biasa. Begitu ada perubahan nyata, penyimpanan
+  // normal (saveStateToFile) mencadangkan lagi seperti biasa.
+  //
+  // Pola "tulis lokal saja" ini sama dengan saveArchiveMonthLocalOnly untuk arsip harian.
   const initialState = getInitialServerState();
-  saveStateToFile(initialState);
+  try {
+    safeAtomicWriteJson(DB_FILE, initialState);
+  } catch (err) {
+    console.error('Error writing initial DB_FILE:', err);
+  }
+  console.warn('[QueueState] File state tidak ada/rusak - memulai dari state bawaan (0 pasien). Cadangan Cloud Firestore SENGAJA tidak disentuh agar data yang ada di sana tetap bisa dipulihkan.');
   return initialState;
 }
 
