@@ -1545,7 +1545,10 @@ export default function App() {
   };
 
   // Toggle Checkbox / Completed Status
-  const handleToggleCompletePatient = (patientId: string) => {
+  const handleToggleCompletePatient = (
+    patientId: string,
+    opts?: { skipJemputan?: boolean }
+  ) => {
     hasLocalMutationRef.current = true;
     const target = patients.find(p => p.id === patientId);
     if (!target) return;
@@ -1696,7 +1699,18 @@ export default function App() {
       }
 
       // Auto-copy Pasien Ranap (isRanap = true) to ANTRIAN JEMPUTAN RANAP (box-jemputan)
-      if (target.isRanap && target.boxId !== 'box-jemputan') {
+      //
+      // TIDAK dijalankan kalau ceklis ini bagian dari PEMINDAHAN ("Pindahkan &
+      // Selesaikan"). Dua hal yang tampak sama di mata kode sebenarnya berbeda:
+      //   - pasien benar-benar tuntas          -> memang harus dijemput
+      //   - pasien diserahkan ke terapis lain  -> tindakannya masih kurang, belum
+      //     waktunya dijemput
+      // Keduanya sama-sama lewat fungsi ini, jadi tanpa penanda opts.skipJemputan
+      // pasien ranap langsung masuk antrean jemputan begitu dipindahkan - padahal
+      // terapis tujuan belum mengerjakan apa pun. Kotak asal TETAP dapat poin
+      // ceklisnya; yang ditunda hanya penjemputannya, sampai terapis tujuan
+      // menceklis selesai - karena di situlah tindakannya benar-benar berakhir.
+      if (!opts?.skipJemputan && target.isRanap && target.boxId !== 'box-jemputan') {
         const jemputanBox = boxes.find(b => b.id === 'box-jemputan');
         const targetBox = boxes.find(b => b.id === target.boxId);
         const originTitle = targetBox ? targetBox.title.split('(')[0].trim() : 'Poliklinik';

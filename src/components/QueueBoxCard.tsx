@@ -63,7 +63,10 @@ interface QueueBoxCardProps {
   patients: PatientItem[];
   allBoxes?: QueueBox[];
   onTogglePin: (boxId: string) => void;
-  onToggleCompletePatient: (patientId: string) => void;
+  // opts.skipJemputan dipakai saat ceklis ini bagian dari PEMINDAHAN pasien, bukan
+  // penyelesaian sungguhan. Pasien ranap tidak boleh langsung masuk antrean jemputan
+  // hanya karena diserahkan ke terapis lain - tindakannya masih kurang.
+  onToggleCompletePatient: (patientId: string, opts?: { skipJemputan?: boolean }) => void;
   onCallPatient: (patient: PatientItem, box: QueueBox) => void;
   onCallNextInBox: (box: QueueBox) => void;
   onAddPatientToBox: (boxId: string) => void;
@@ -2031,7 +2034,10 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
             }
           }}
           onCompleteSourcePatient={(pid) => {
-            onToggleCompletePatient(pid);
+            // Kotak asal tetap dapat poin ceklisnya, TAPI pasien ranap belum boleh
+            // masuk antrean jemputan - ia baru diserahkan, tindakannya masih kurang.
+            // Jemputan terbit saat terapis tujuan menceklis selesai.
+            onToggleCompletePatient(pid, { skipJemputan: true });
           }}
           onDeleteSourcePatient={(pid) => {
             // Ini bukan penghapusan pasien sungguhan (datanya sudah dipindahkan ke
