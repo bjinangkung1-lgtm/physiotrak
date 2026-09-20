@@ -1020,10 +1020,17 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   // Hanya baca+tulis file arsip bulan berjalan, bukan seluruh riwayat.
   const existingVisits = loadDailyArchiveForDate(today);
   const visitsMap = new Map<string, any>();
-  const currentStateForBoxes = (!boxes || !Array.isArray(boxes)) ? loadStateFromFile() : null;
+  const stateSekarang = loadStateFromFile();
   const currentBoxes = (boxes && Array.isArray(boxes))
     ? boxes
-    : ((currentStateForBoxes && Array.isArray(currentStateForBoxes.boxes)) ? currentStateForBoxes.boxes : []);
+    : ((stateSekarang && Array.isArray(stateSekarang.boxes)) ? stateSekarang.boxes : []);
+  // Id pasien yang BENAR-BENAR masih ada di antrean SAAT INI. Dipakai di bawah untuk
+  // memutuskan apakah penanda penutup kunjungan boleh dibersihkan.
+  const idAntreanHidup = new Set<string>(
+    (stateSekarang && Array.isArray(stateSekarang.patients))
+      ? stateSekarang.patients.map((p: any) => p && p.id).filter(Boolean)
+      : []
+  );
 
   // Keep all existing visits recorded today
   existingVisits.forEach((v: any) => {
@@ -1065,8 +1072,15 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
       // penandanya dibersihkan. Ini yang membuat "Restore Antrean" bekerja benar: pasien
       // yang tadinya dihapus lalu dikembalikan tidak ikut membawa status "dipindahkan"
       // yang sudah tidak berlaku.
-      endedAt: null,
-      endedReason: undefined,
+      //
+      // PENTING: yang menentukan adalah antrean SAAT INI (idAntreanHidup), BUKAN daftar
+      // `patients` yang dikirim ke fungsi ini. Sinkronisasi ini ditunda 1,5 detik, jadi
+      // daftar itu bisa berupa cuplikan dari SEBELUM antrean dibersihkan. Kalau cuplikan
+      // lama itu yang dipercaya, penanda penutup yang baru saja ditulis oleh "Bersihkan
+      // Antrean" akan terhapus lagi - dan timer Respon Time pasien yang sudah dibersihkan
+      // kembali berjalan abadi. Pasien yang sudah tidak ada di antrean TIDAK disentuh,
+      // sehingga penanda penutupnya (dari ...prev) tetap utuh.
+      ...(idAntreanHidup.has(p.id) ? { endedAt: null, endedReason: undefined } : {}),
     });
   });
 

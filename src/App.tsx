@@ -2326,6 +2326,7 @@ export default function App() {
 
     // 3. Archive patients to daily database in background
     const today = getLocalDateStringWIB();
+    const waktuBersih = new Date().toISOString();
     const currentVisits: DailyPatientVisit[] = boxPatients.map(p => ({
       id: p.id,
       visitDate: today,
@@ -2350,6 +2351,13 @@ export default function App() {
       calledAt: p.lastCalledAt || null,
       completedAt: p.completedAt || null,
       calledCount: p.calledCount || 0,
+      // Pasien yang ikut terbersihkan TANPA pernah diceklis selesai harus ditutup
+      // di sini. Tanpa penanda ini catatan kunjungannya tetap "Sedang Berjalan"
+      // selamanya, dan timer Respon Time-nya terus berjalan walau antreannya sudah
+      // lama kosong (terbukti masih menghitung sampai 1440 menit sehari sesudahnya).
+      // Pasien yang SUDAH selesai tidak disentuh - jam selesainya sendiri yang
+      // menghentikan timernya, dan statusnya harus tetap terbaca "Selesai".
+      ...(p.completed ? {} : { endedAt: waktuBersih, endedReason: 'dihapus' as const }),
     }));
 
     // Async batch save to daily archive (non-blocking)
@@ -2421,6 +2429,9 @@ export default function App() {
           calledAt: p.lastCalledAt || null,
           completedAt: p.completedAt || null,
           calledCount: p.calledCount || 0,
+          // Sama seperti pada pembersihan satu kotak: pasien yang belum diceklis
+          // selesai ditutup di sini supaya timer Respon Time-nya berhenti.
+          ...(p.completed ? {} : { endedAt: resetTimestamp, endedReason: 'dihapus' as const }),
         };
       });
 
