@@ -29,6 +29,11 @@ const QUEUE_STATE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'current_queu
 const DAILY_ARCHIVE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'daily_archive');
 const MASTER_PATIENTS_DOC_REF = doc(serverFirestoreDb, 'system_state', 'master_patients');
 const RANAP_HISTORY_DOC_REF = doc(serverFirestoreDb, 'system_state', 'ranap_history');
+// Catatan id pasien yang sudah dibersihkan oleh "Bersihkan Antrean". SENGAJA disimpan
+// di dokumen TERPISAH dari current_queue: kalau ikut menumpang di sana, catatan ini akan
+// ikut hilang/mundur persis pada saat ia paling dibutuhkan - yaitu ketika wadah server
+// diganti dan current_queue dipulihkan dari cadangan yang masih versi SEBELUM reset.
+const RESET_TOMBSTONE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'reset_tombstones');
 
 // Increase payload limit for image uploads
 app.use(express.json({ limit: '50mb' }));
@@ -46,6 +51,7 @@ const LAIN_LAIN_DB_FILE = path.join(DATA_DIR, 'lain_lain_db.json');
 const INVENTORY_DB_FILE = path.join(DATA_DIR, 'inventory_db.json');
 const SECURITY_CONFIG_FILE = path.join(DATA_DIR, 'security_config.json');
 const DELETION_AUDIT_FILE = path.join(DATA_DIR, 'deletion_audit.json');
+const RESET_TOMBSTONE_FILE = path.join(DATA_DIR, 'reset_tombstones.json');
 const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -1565,6 +1571,203 @@ function sanitizeServerBox(b: any) {
 }
 
 // Helper: load state from file
+// ============================================================================
+// CATATAN RESET YANG TAHAN GANTI-WADAH
+// ----------------------------------------------------------------------------
+// Sebelum ini, id pasien yang dibersihkan lewat "Bersihkan Antrean" HANYA hidup
+// di dalam objek state antrean (field preResetPatientIds). Selama state itu utuh
+// semuanya benar: perangkat yang ketiduran dan menyiarkan ulang daftar lamanya
+// akan ditolak. Masalahnya, catatan itu ikut lenyap justru pada saat ia paling
+// dibutuhkan - saat wadah server diganti (platform me-recycle instance yang idle,
+// disk lokalnya ikut hilang):
+//
+//   a. Cadangan Cloud Firestore tidak terbaca (jaringan/kuota) -> server mulai
+//      dari state bawaan, preResetPatientIds kosong.
+//   b. Cadangan Cloud Firestore terbaca tapi isinya masih versi SEBELUM reset
+//      (mirror terakhir belum sempat terkirim / sedang jeda kuota) -> yang
+//      dipulihkan justru pasien lama BESERTA catatan reset yang ikut mundur.
+//
+// Di kedua keadaan itu tidak ada lagi yang menahan pasien lama, sehingga perangkat
+// mana pun yang masih menyimpan daftar lama cukup sekali menyiarkan untuk
+// menghidupkannya kembali - persis gejala "semalam sudah dibersihkan, pagi muncul
+// lagi".
+//
+// Jadi catatan ini dipisahkan: berkas lokal sendiri + dokumen Firestore sendiri,
+// dan SELALU ditulis dengan pola baca-gabung-tulis (tidak pernah menimpa buta),
+// sama seperti pola cadangan arsip harian per tanggal. Sifatnya hanya BERTAMBAH,
+// jadi tidak bisa mundur walau ada instance basi yang ikut menulis.
+// ============================================================================
+const RESET_TOMBSTONE_MAX = 5000;
+let tombstoneResetPermanen = new Set<string>();
+let lastResetAtPermanen: string | null = null;
+
+function simpanTombstoneResetKeDisk() {
+  try {
+    safeAtomicWriteJson(RESET_TOMBSTONE_FILE, {
+      ids: Array.from(tombstoneResetPermanen).slice(-RESET_TOMBSTONE_MAX),
+      lastResetAt: lastResetAtPermanen,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('[ResetTombstone] Gagal menyimpan catatan reset ke disk:', err);
+  }
+}
+
+function muatTombstoneResetDariDisk() {
+  try {
+    if (!fs.existsSync(RESET_TOMBSTONE_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(RESET_TOMBSTONE_FILE, 'utf-8'));
+    if (Array.isArray(raw?.ids)) {
+      for (const id of raw.ids) if (id) tombstoneResetPermanen.add(String(id));
+    }
+    if (typeof raw?.lastResetAt === 'string') lastResetAtPermanen = raw.lastResetAt;
+  } catch (err) {
+    console.warn('[ResetTombstone] Catatan reset lokal tidak terbaca, dilewati:', err);
+  }
+}
+muatTombstoneResetDariDisk();
+
+// Cadangkan catatan reset ke Firestore dengan BACA -> GABUNG -> TULIS. Kalau
+// dokumennya tidak bisa dibaca, penulisan sengaja DIBATALKAN (bukan ditimpa),
+// supaya instance yang jaringannya sedang bermasalah tidak menghapus catatan
+// yang sudah ada di sana.
+async function cadangkanTombstoneResetKeFirestore(): Promise<void> {
+  if (isFirestoreMirrorDisabled) return;
+  try {
+    let gabungan = new Set<string>(tombstoneResetPermanen);
+    let resetTerbaru = lastResetAtPermanen;
+    const snapshot = await getDoc(RESET_TOMBSTONE_DOC_REF);
+    if (snapshot.exists()) {
+      const data: any = snapshot.data();
+      if (Array.isArray(data?.ids)) {
+        for (const id of data.ids) if (id) gabungan.add(String(id));
+      }
+      if (typeof data?.lastResetAt === 'string') {
+        if (!resetTerbaru || new Date(data.lastResetAt).getTime() > new Date(resetTerbaru).getTime()) {
+          resetTerbaru = data.lastResetAt;
+        }
+      }
+    }
+    const idsFinal = Array.from(gabungan).slice(-RESET_TOMBSTONE_MAX);
+    await setDoc(RESET_TOMBSTONE_DOC_REF, {
+      ids: idsFinal,
+      lastResetAt: resetTerbaru || null,
+      lastMirroredAt: new Date().toISOString(),
+    });
+    tombstoneResetPermanen = new Set(idsFinal);
+    lastResetAtPermanen = resetTerbaru;
+    simpanTombstoneResetKeDisk();
+  } catch (err: any) {
+    handleFirestoreQuotaError(err, 'ResetTombstone');
+  }
+}
+
+// Dipanggil setiap kali antrean dibersihkan. Menulis ke disk lebih dulu (selalu
+// berhasil & langsung berlaku untuk instance ini), lalu mencadangkan ke Firestore
+// di latar belakang.
+function catatTombstoneReset(ids: any[], lastResetAt?: string | null) {
+  let bertambah = false;
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (id && !tombstoneResetPermanen.has(String(id))) {
+      tombstoneResetPermanen.add(String(id));
+      bertambah = true;
+    }
+  }
+  if (lastResetAt && (!lastResetAtPermanen || new Date(lastResetAt).getTime() > new Date(lastResetAtPermanen).getTime())) {
+    lastResetAtPermanen = lastResetAt;
+    bertambah = true;
+  }
+  if (!bertambah) return;
+  simpanTombstoneResetKeDisk();
+  void cadangkanTombstoneResetKeFirestore();
+}
+
+// Saat instance baru menyala, tarik catatan reset dari Firestore SEBELUM state
+// antrean dipakai, supaya pembersihan yang dilakukan instance sebelumnya tetap
+// berlaku walau disk lokal wadah ini masih kosong.
+async function hydrateResetTombstonesFromFirestoreIfNeeded(): Promise<void> {
+  try {
+    const snapshot = await getDoc(RESET_TOMBSTONE_DOC_REF);
+    if (!snapshot.exists()) return;
+    const data: any = snapshot.data();
+    let bertambah = false;
+    if (Array.isArray(data?.ids)) {
+      for (const id of data.ids) {
+        if (id && !tombstoneResetPermanen.has(String(id))) {
+          tombstoneResetPermanen.add(String(id));
+          bertambah = true;
+        }
+      }
+    }
+    if (typeof data?.lastResetAt === 'string') {
+      if (!lastResetAtPermanen || new Date(data.lastResetAt).getTime() > new Date(lastResetAtPermanen).getTime()) {
+        lastResetAtPermanen = data.lastResetAt;
+        bertambah = true;
+      }
+    }
+    if (bertambah) {
+      simpanTombstoneResetKeDisk();
+      console.log(`[ResetTombstone] ${tombstoneResetPermanen.size} id pasien yang sudah dibersihkan dipulihkan dari cadangan Cloud Firestore.`);
+    }
+  } catch (err) {
+    console.warn('[ResetTombstone] Gagal memulihkan catatan reset dari Cloud Firestore:', err);
+  }
+}
+
+// Cabut catatan penghapusan untuk id tertentu. Dipakai HANYA saat petugas sengaja
+// mengembalikan pasien dari Database Harian ("Kembalikan ke Antrean"). Tanpa ini,
+// pasien yang dikembalikan akan langsung tersaring lagi oleh catatan reset.
+function cabutTombstoneReset(ids: any[]): number {
+  let dicabut = 0;
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (id && tombstoneResetPermanen.delete(String(id))) dicabut++;
+  }
+  if (dicabut > 0) {
+    simpanTombstoneResetKeDisk();
+    // Sengaja TIDAK memanggil cadangkanTombstoneResetKeFirestore(): fungsi itu
+    // hanya menggabung (union), jadi id yang baru dicabut akan langsung masuk lagi
+    // dari dokumen cloud. Pencabutan ditulis langsung supaya benar-benar hilang.
+    void tulisUlangTombstoneResetKeFirestore();
+  }
+  return dicabut;
+}
+
+async function tulisUlangTombstoneResetKeFirestore(): Promise<void> {
+  if (isFirestoreMirrorDisabled) return;
+  try {
+    await setDoc(RESET_TOMBSTONE_DOC_REF, {
+      ids: Array.from(tombstoneResetPermanen).slice(-RESET_TOMBSTONE_MAX),
+      lastResetAt: lastResetAtPermanen || null,
+      lastMirroredAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    handleFirestoreQuotaError(err, 'ResetTombstone');
+  }
+}
+
+// Terapkan catatan reset permanen ke sebuah state antrean: pasien yang sudah
+// dibersihkan dibuang, dan daftar preResetPatientIds-nya dilengkapi kembali.
+// Ini yang membuat cadangan Firestore versi LAMA (berisi pasien sebelum reset)
+// tidak bisa lagi menghidupkan pasien yang sudah dihapus.
+function terapkanTombstoneReset(state: any): { state: any; dibuang: number } {
+  if (!state || typeof state !== 'object' || tombstoneResetPermanen.size === 0) {
+    return { state, dibuang: 0 };
+  }
+  let dibuang = 0;
+  if (Array.isArray(state.patients)) {
+    const sisa = state.patients.filter((p: any) => !(p && p.id && tombstoneResetPermanen.has(String(p.id))));
+    dibuang = state.patients.length - sisa.length;
+    if (dibuang > 0) state.patients = sisa;
+  }
+  const gabungan = new Set<string>(Array.isArray(state.preResetPatientIds) ? state.preResetPatientIds.map(String) : []);
+  const sebelum = gabungan.size;
+  for (const id of tombstoneResetPermanen) gabungan.add(id);
+  if (gabungan.size !== sebelum) {
+    state.preResetPatientIds = Array.from(gabungan).slice(-RESET_TOMBSTONE_MAX);
+  }
+  return { state, dibuang };
+}
+
 function loadStateFromFile() {
   try {
     if (fs.existsSync(DB_FILE)) {
@@ -1605,6 +1808,15 @@ function loadStateFromFile() {
             saveStateToFile(parsed);
           }
         }
+        // Saring pasien yang sudah pernah dibersihkan lewat "Bersihkan Antrean".
+        // Penting saat wadah server baru memulihkan current_queue dari cadangan
+        // Cloud Firestore yang ternyata masih versi SEBELUM reset: tanpa saringan
+        // ini, pasien lama ikut hidup lagi dan langsung tersiar ke semua perangkat.
+        const hasilSaring = terapkanTombstoneReset(parsed);
+        if (hasilSaring.dibuang > 0) {
+          console.log(`[ResetTombstone] ${hasilSaring.dibuang} pasien lama yang sudah dibersihkan disaring dari state yang dimuat.`);
+          saveStateToFile(parsed);
+        }
         return parsed;
       }
     }
@@ -1630,6 +1842,12 @@ function loadStateFromFile() {
   //
   // Pola "tulis lokal saja" ini sama dengan saveArchiveMonthLocalOnly untuk arsip harian.
   const initialState = getInitialServerState();
+  // Bawa serta catatan reset permanen. Tanpa ini, wadah server yang baru menyala
+  // tanpa disk & tanpa cadangan akan mulai dengan daftar tombstone KOSONG - dan
+  // perangkat mana pun yang masih menyimpan antrean lama cukup sekali menyiarkan
+  // untuk menghidupkannya kembali. Inilah yang membuat antrean yang sudah
+  // dibersihkan semalam bisa muncul lagi keesokan paginya.
+  terapkanTombstoneReset(initialState);
   try {
     safeAtomicWriteJson(DB_FILE, initialState);
   } catch (err) {
@@ -2288,6 +2506,13 @@ async function hydrateStateFromFirestoreIfNeeded(): Promise<void> {
     const cloudHasPatients = Array.isArray(cloudState?.patients) && cloudState.patients.length > 0;
     if (cloudHasBoxes || cloudHasPatients) {
       console.log(`[FirestoreHydrate] File lokal kosong (kemungkinan instance baru/di-restart). Memulihkan ${cloudState?.patients?.length || 0} pasien & ${cloudState?.boxes?.length || 0} kotak dari cadangan Cloud Firestore.`);
+      // Cadangan bisa saja masih versi SEBELUM "Bersihkan Antrean" terakhir (mirror
+      // terakhir belum sempat terkirim / sedang jeda kuota). Saring dulu di sini,
+      // jangan sampai pasien yang sudah dibersihkan ikut dipulihkan lalu tersiar.
+      const hasilSaring = terapkanTombstoneReset(cloudState);
+      if (hasilSaring.dibuang > 0) {
+        console.log(`[ResetTombstone] ${hasilSaring.dibuang} pasien dari cadangan diabaikan karena sudah pernah dibersihkan.`);
+      }
       saveStateToFile(cloudState);
     }
   } catch (err) {
@@ -3047,6 +3272,13 @@ app.post('/api/queue', async (req, res) => {
       logNewDeletionsForAudit(existingState, payload);
       const mergedState = reconcileQueueStates(existingState, payload);
 
+      // Reset yang datang sebagai SIARAN dari perangkat (bukan lewat /api/queue/reset)
+      // harus ikut dicatat permanen, kalau tidak pembersihan lewat jalur ini tetap
+      // bisa mundur saat wadah server diganti.
+      if (mergedState && mergedState.isExplicitReset === true) {
+        catatTombstoneReset(mergedState.preResetPatientIds, mergedState.lastResetAt);
+      }
+
       saveStateToFile(mergedState);
 
       broadcastUpdate({ type: 'SYNC_STATE', state: mergedState, senderDeviceId });
@@ -3061,6 +3293,37 @@ app.post('/api/queue', async (req, res) => {
   } catch (error: any) {
     console.error('[QueueSync] Error updating state:', error);
     res.status(500).json({ error: 'Gagal memperbarui antrian' });
+  }
+});
+
+// POST /api/queue/restore-patient - Cabut catatan penghapusan supaya pasien yang
+// SENGAJA dikembalikan dari Database Harian tidak tersaring lagi oleh catatan reset.
+app.post('/api/queue/restore-patient', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.patientIds) ? req.body.patientIds.filter(Boolean).map(String) : [];
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'patientIds kosong' });
+    }
+    const idSet = new Set(ids);
+    const dicabut = cabutTombstoneReset(ids);
+
+    await enqueueQueueWrite(async () => {
+      const state = loadStateFromFile() || getInitialServerState();
+      const sebelum = JSON.stringify([state.preResetPatientIds, state.deletedPatientIds]);
+      state.preResetPatientIds = (Array.isArray(state.preResetPatientIds) ? state.preResetPatientIds : [])
+        .filter((id: any) => !idSet.has(String(id)));
+      state.deletedPatientIds = (Array.isArray(state.deletedPatientIds) ? state.deletedPatientIds : [])
+        .filter((id: any) => !idSet.has(String(id)));
+      if (JSON.stringify([state.preResetPatientIds, state.deletedPatientIds]) !== sebelum) {
+        saveStateToFile(state);
+      }
+    });
+
+    console.log(`[ResetTombstone] ${dicabut} catatan penghapusan dicabut untuk pemulihan pasien dari Database Harian.`);
+    res.json({ status: 'ok', dicabut });
+  } catch (error: any) {
+    console.error('[ResetTombstone] Gagal mencabut catatan penghapusan:', error);
+    res.status(500).json({ error: 'Gagal mencabut catatan penghapusan' });
   }
 });
 
@@ -3097,6 +3360,12 @@ app.post('/api/queue/reset', async (req, res) => {
         deletedBoxIds: Array.isArray(existingState.deletedBoxIds) ? existingState.deletedBoxIds : [],
         lastUpdated: new Date().toISOString(),
       };
+
+      // Catat DULU ke penyimpanan permanen (berkas & dokumen Firestore terpisah),
+      // baru simpan state. Urutannya sengaja begini: kalau wadah server mati tepat
+      // setelah ini, catatan reset sudah aman di tempat yang tidak ikut mundur
+      // bersama cadangan current_queue.
+      catatTombstoneReset(preResetPatientIds, resetTime);
 
       saveStateToFile(resetState);
       appendDeletionAudit({
@@ -4580,6 +4849,11 @@ async function startServer() {
   // Pulihkan state dari Cloud Firestore dulu kalau disk lokal instance ini kosong/baru
   // (mis. instance backend di-recycle oleh platform hosting saat idle) sebelum mulai
   // melayani request, supaya device yang connect tidak melihat papan antrian kosong.
+  // HARUS paling dulu: catatan "pasien ini sudah dibersihkan" perlu sudah ada di
+  // memori SEBELUM state antrean dipulihkan dari cadangan, supaya cadangan yang
+  // kebetulan masih versi sebelum reset tidak sempat menghidupkan pasien lama.
+  await hydrateResetTombstonesFromFirestoreIfNeeded();
+
   await Promise.all([
     hydrateStateFromFirestoreIfNeeded(),
     hydrateDailyArchiveFromFirestoreIfNeeded(),

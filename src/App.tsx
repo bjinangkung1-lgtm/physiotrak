@@ -215,13 +215,27 @@ export function createLocalTombstoneStore(storageKey: string, maxItems: number =
     } catch {}
   };
 
-  return { getTombstones, addTombstone, clearTombstones };
+  // Dipakai saat petugas SENGAJA mengembalikan sesuatu yang tadinya dihapus
+  // (mis. "Kembalikan ke Antrean" dari Database Harian). Tanpa ini, id-nya akan
+  // tetap tertahan catatan penghapusan dan pasiennya hilang lagi begitu perangkat
+  // menyamakan diri berikutnya.
+  const removeTombstone = (id: string): void => {
+    try {
+      if (!id) return;
+      const set = getTombstones();
+      if (!set.delete(id)) return;
+      safeLocalSet(storageKey, JSON.stringify(Array.from(set)));
+    } catch {}
+  };
+
+  return { getTombstones, addTombstone, clearTombstones, removeTombstone };
 }
 
 const patientTombstoneStore = createLocalTombstoneStore('antrian_deleted_patient_tombstones');
 export const getLocalTombstones = patientTombstoneStore.getTombstones;
 export const addLocalTombstone = patientTombstoneStore.addTombstone;
 export const clearLocalTombstones = patientTombstoneStore.clearTombstones;
+export const removeLocalTombstone = patientTombstoneStore.removeTombstone;
 
 const boxTombstoneStore = createLocalTombstoneStore('antrian_deleted_box_tombstones');
 export const getLocalBoxTombstones = boxTombstoneStore.getTombstones;
@@ -241,6 +255,7 @@ const preResetPatientStore = createLocalTombstoneStore('antrian_pre_reset_patien
 export const getLocalPreResetPatientIds = preResetPatientStore.getTombstones;
 export const addLocalPreResetPatientId = preResetPatientStore.addTombstone;
 export const clearLocalPreResetPatientIds = preResetPatientStore.clearTombstones;
+export const removeLocalPreResetPatientId = preResetPatientStore.removeTombstone;
 
 // Menerima state ber-flag reset artinya perangkat ini LANGSUNG mengosongkan seluruh
 // antrean di layarnya. Itu memang perilaku yang benar untuk tombol "Bersihkan Antrean",
@@ -2107,6 +2122,21 @@ export default function App() {
 
     hasLocalMutationRef.current = true;
     knownPatientIdsRef.current.add(restoredPatient.id);
+
+    // Pasien ini dikembalikan dengan id ASLI-nya. Kalau dia tadinya ikut terhapus oleh
+    // "Bersihkan Antrean" atau "Bersihkan Kotak", id-nya masih tercatat sebagai
+    // "sudah dihapus" - baik di perangkat ini maupun di server. Catatan itu harus
+    // dicabut lebih dulu, kalau tidak pasiennya akan tampil sekejap lalu hilang lagi
+    // begitu perangkat menyamakan diri dengan server.
+    removeLocalTombstone(restoredPatient.id);
+    removeLocalPreResetPatientId(restoredPatient.id);
+    deletedPatientIdsRef.current = deletedPatientIdsRef.current.filter(id => id !== restoredPatient.id);
+    fetch('/api/queue/restore-patient', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patientIds: [restoredPatient.id] }),
+    }).catch(err => console.warn('Gagal mencabut catatan penghapusan di server:', err));
+
     setPatients(prev => (prev.some(p => p.id === restoredPatient.id) ? prev : [...prev, restoredPatient]));
     showAppToast(`Pasien "${restoredPatient.patientName}" berhasil dikembalikan ke antrean.`);
   };
