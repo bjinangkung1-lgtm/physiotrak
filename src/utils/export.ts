@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { QueueBox, PatientItem, CallHistoryRecord } from '../types';
-import { calculatePatientTimeMetrics, computeResponseTimeAnalytics } from './responseTimeAnalytics';
+import { calculatePatientTimeMetrics, computeResponseTimeAnalytics, bangunKonteksAntrean } from './responseTimeAnalytics';
 
 export interface DailyReportData {
   date: string;
@@ -80,9 +80,12 @@ export function exportToExcel(data: DailyReportData, filename = `Laporan_Antrian
     'Kepatuhan SPM'
   ];
 
+  const konteksBaris = bangunKonteksAntrean(data.patients);
   const patientRows = data.patients.map(p => {
     const box = data.boxes.find(b => b.id === p.boxId);
-    const metrics = calculatePatientTimeMetrics(p, data.boxes);
+    const metrics = calculatePatientTimeMetrics(
+      p, data.boxes, Date.now(), true, konteksBaris.tersediaSejak.get(p.id)
+    );
     return [
       p.queueNumber,
       p.patientName,
@@ -271,9 +274,12 @@ export function exportToPDF(data: DailyReportData, filename = `Laporan_Antrian_$
   doc.setTextColor(15, 23, 42);
   doc.text('2. Daftar Pasien Hari Ini & Respon Time', 14, lastY);
 
+  const konteksTabel = bangunKonteksAntrean(data.patients);
   const patientTableRows = data.patients.map(p => {
     const box = data.boxes.find(b => b.id === p.boxId);
-    const metrics = calculatePatientTimeMetrics(p, data.boxes);
+    const metrics = calculatePatientTimeMetrics(
+      p, data.boxes, Date.now(), true, konteksTabel.tersediaSejak.get(p.id)
+    );
     return [
       p.queueNumber,
       p.patientName + (p.isWarning ? ' (🛑)' : ''),
@@ -411,12 +417,21 @@ export function exportTherapistDailyPDF(data: TherapistDailyLogbookData, filenam
   let compliantCount = 0;
   let countWithWait = 0;
 
-  data.patients.filter(p => p.completed).forEach(p => {
-    const metrics = calculatePatientTimeMetrics(p, data.boxes);
-    totalWait += metrics.responseTimeMinutes;
-    countWithWait++;
-    if (metrics.isCompliant) compliantCount++;
-  });
+  // Aturan yang sama dengan layar Respon Time: jam mulai menghormati saat pasien
+  // benar-benar tersedia, dan tindakan tambahan (antrean kedua di kotak yang sama)
+  // tidak ikut dihitung. Tanpa ini, angka di Excel akan berbeda dari angka di layar.
+  const konteksRingkasan = bangunKonteksAntrean(data.patients);
+  data.patients
+    .filter(p => p.completed && !konteksRingkasan.tindakanTambahan.has(p.id))
+    .forEach(p => {
+      const metrics = calculatePatientTimeMetrics(
+        p, data.boxes, Date.now(), true, konteksRingkasan.tersediaSejak.get(p.id)
+      );
+      if (metrics.isDataInvalid) return;
+      totalWait += metrics.responseTimeMinutes;
+      countWithWait++;
+      if (metrics.isCompliant) compliantCount++;
+    });
 
   const avgWait = countWithWait > 0 ? Math.round(totalWait / countWithWait) : 0;
   const compliance = countWithWait > 0 ? Math.round((compliantCount / countWithWait) * 100) : 100;
@@ -448,8 +463,11 @@ export function exportTherapistDailyPDF(data: TherapistDailyLogbookData, filenam
   });
 
   // Table of Patients
+  const konteksPdf = bangunKonteksAntrean(data.patients);
   const patientRows = data.patients.map((p, idx) => {
-    const metrics = calculatePatientTimeMetrics(p, data.boxes);
+    const metrics = calculatePatientTimeMetrics(
+      p, data.boxes, Date.now(), true, konteksPdf.tersediaSejak.get(p.id)
+    );
     const regTime = p.createdAt && !isNaN(new Date(p.createdAt).getTime())
       ? new Date(p.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
       : '-';
@@ -543,12 +561,21 @@ export function exportTherapistDailyExcel(data: TherapistDailyLogbookData, filen
   let compliantCount = 0;
   let countWithWait = 0;
 
-  data.patients.filter(p => p.completed).forEach(p => {
-    const metrics = calculatePatientTimeMetrics(p, data.boxes);
-    totalWait += metrics.responseTimeMinutes;
-    countWithWait++;
-    if (metrics.isCompliant) compliantCount++;
-  });
+  // Aturan yang sama dengan layar Respon Time: jam mulai menghormati saat pasien
+  // benar-benar tersedia, dan tindakan tambahan (antrean kedua di kotak yang sama)
+  // tidak ikut dihitung. Tanpa ini, angka di Excel akan berbeda dari angka di layar.
+  const konteksRingkasan = bangunKonteksAntrean(data.patients);
+  data.patients
+    .filter(p => p.completed && !konteksRingkasan.tindakanTambahan.has(p.id))
+    .forEach(p => {
+      const metrics = calculatePatientTimeMetrics(
+        p, data.boxes, Date.now(), true, konteksRingkasan.tersediaSejak.get(p.id)
+      );
+      if (metrics.isDataInvalid) return;
+      totalWait += metrics.responseTimeMinutes;
+      countWithWait++;
+      if (metrics.isCompliant) compliantCount++;
+    });
 
   const avgWait = countWithWait > 0 ? Math.round(totalWait / countWithWait) : 0;
   const compliance = countWithWait > 0 ? Math.round((compliantCount / countWithWait) * 100) : 100;
@@ -589,8 +616,11 @@ export function exportTherapistDailyExcel(data: TherapistDailyLogbookData, filen
     'Kepatuhan SPM (<= 30m)'
   ];
 
+  const konteksDetail = bangunKonteksAntrean(data.patients);
   const detailRows = data.patients.map((p, idx) => {
-    const metrics = calculatePatientTimeMetrics(p, data.boxes);
+    const metrics = calculatePatientTimeMetrics(
+      p, data.boxes, Date.now(), true, konteksDetail.tersediaSejak.get(p.id)
+    );
     const regTime = p.createdAt && !isNaN(new Date(p.createdAt).getTime())
       ? new Date(p.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
       : '-';

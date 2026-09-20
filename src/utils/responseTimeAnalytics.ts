@@ -36,6 +36,16 @@ export interface PatientTimeMetrics {
   isEnded?: boolean;
   endedReason?: 'dipindahkan' | 'dihapus';
   endedAt?: Date;
+  // true kalau ini entri KEDUA dan seterusnya untuk pasien yang sama di kotak yang
+  // sama. Terapis sengaja mengantrekan satu pasien lebih dari sekali karena
+  // tindakannya banyak, dan itu memang dihitung penuh sebagai beban kerja. Tapi
+  // entri tambahan itu BUKAN "pasien yang sedang menunggu dilayani", jadi ia
+  // dikecualikan dari rata-rata respon time dan kepatuhan SPM supaya angkanya
+  // tidak menggambarkan antrean yang sebenarnya tidak ada.
+  isTindakanTambahan?: boolean;
+  // Jam saat pasien benar-benar TERSEDIA untuk kotak ini - yaitu setelah tindakannya
+  // di kotak lain selesai. Dipakai sebagai batas bawah jam mulai.
+  tersediaSejak?: Date;
   formattedWait: string;
   formattedResponseTime: string;
   formattedService?: string;
@@ -92,11 +102,115 @@ export function formatMinutes(mins: number): string {
   return remainingMins > 0 ? `${hours} jam ${remainingMins} mnt` : `${hours} jam`;
 }
 
+// ---------------------------------------------------------------------------
+// Konteks antrean satu hari: hal-hal yang TIDAK bisa diketahui dari satu baris
+// antrean saja, melainkan hanya dengan melihat seluruh antrean pasien itu.
+//
+// Dua keadaan nyata di lapangan yang membuat angka respon time menyesatkan:
+//
+//  1. Satu pasien diantrekan DUA KALI di KOTAK YANG SAMA karena tindakannya banyak.
+//     Itu memang disengaja dan dihitung penuh sebagai beban kerja terapis. Tapi
+//     entri kedua bukan "pasien yang menunggu dilayani" - memasukkannya ke
+//     rata-rata dan SPM hanya mengotori angka.
+//
+//  2. Satu pasien diantrekan di DUA KOTAK (mis. fisio dan okupasi). Kotak kedua
+//     terpaksa menunggu tindakan di kotak pertama selesai, lalu tercatat lambat -
+//     padahal terapisnya tidak lambat sama sekali. Satu pasien tidak bisa berada
+//     di dua tempat sekaligus, jadi jam mulai yang adil adalah saat pasien
+//     benar-benar TERSEDIA.
+// ---------------------------------------------------------------------------
+export interface KonteksAntrean {
+  // id entri -> jam (epoch ms) saat pasien benar-benar tersedia untuk kotak itu
+  tersediaSejak: Map<string, number>;
+  // id entri yang merupakan antrean kedua dan seterusnya di kotak yang sama
+  tindakanTambahan: Set<string>;
+}
+
+// Satu pasien dikenali dari nomor rekam medisnya. Kalau kosong, baru pakai
+// patientId, lalu namanya - supaya data lama yang tidak lengkap tetap tertangani.
+function kunciPasien(p: PatientItem): string {
+  const rm = (p.medicalRecordNo || '').trim().toUpperCase();
+  if (rm) return 'RM:' + rm;
+  if (p.patientId) return 'PID:' + String(p.patientId);
+  return 'NAMA:' + (p.patientName || '').trim().toUpperCase();
+}
+
+export function bangunKonteksAntrean(patients: PatientItem[]): KonteksAntrean {
+  const tersediaSejak = new Map<string, number>();
+  const tindakanTambahan = new Set<string>();
+
+  const grup = new Map<string, PatientItem[]>();
+  (patients || []).forEach((p) => {
+    if (!p || !p.id) return;
+    const k = kunciPasien(p);
+    const daftar = grup.get(k) || [];
+    daftar.push(p);
+    grup.set(k, daftar);
+  });
+
+  grup.forEach((entri) => {
+    // Pasien yang cuma punya satu antrean tidak terpengaruh sama sekali.
+    if (entri.length < 2) return;
+
+    // --- Aturan 1: entri kedua dst di kotak yang SAMA = tindakan tambahan ---
+    const perKotak = new Map<string, PatientItem[]>();
+    entri.forEach((p) => {
+      const daftar = perKotak.get(p.boxId) || [];
+      daftar.push(p);
+      perKotak.set(p.boxId, daftar);
+    });
+    perKotak.forEach((daftar) => {
+      if (daftar.length < 2) return;
+      const urut = [...daftar].sort((a, b) => {
+        const ta = new Date(a.createdAt).getTime();
+        const tb = new Date(b.createdAt).getTime();
+        const va = isNaN(ta) ? 0 : ta;
+        const vb = isNaN(tb) ? 0 : tb;
+        if (va !== vb) return va - vb;
+        // Urutan harus STABIL walau jam inputnya sama persis, supaya entri yang
+        // sama selalu dianggap "yang pertama" setiap kali laporan dibuka.
+        return String(a.id).localeCompare(String(b.id));
+      });
+      urut.slice(1).forEach((p) => tindakanTambahan.add(p.id));
+    });
+
+    // --- Aturan 2: jam pasien benar-benar tersedia untuk tiap entri ---
+    entri.forEach((p) => {
+      // Batas akhir entri ini: jam ceklis, atau jam penutupan kalau ia dipindahkan/
+      // dihapus tanpa pernah diceklis. WAJIB ikut menghitung endedAt - tanpa itu,
+      // entri yang dipindahkan dianggap "belum punya akhir", sehingga tindakan di
+      // kotak TUJUAN yang selesai BELAKANGAN malah dikira menahan pasien di kotak
+      // ASAL. Akibatnya durasinya runtuh jadi 0 menit, yang jelas keliru.
+      const akhirP = p.completedAt
+        ? new Date(p.completedAt).getTime()
+        : (p.endedAt ? new Date(p.endedAt).getTime() : NaN);
+      let tersedia = NaN;
+      entri.forEach((q) => {
+        if (q.id === p.id) return;
+        const akhirQ = q.completedAt ? new Date(q.completedAt).getTime() : NaN;
+        if (isNaN(akhirQ)) return;
+        // Hanya tindakan yang selesai BENAR-BENAR LEBIH DULU yang menahan pasien.
+        // Kalau jamnya sama persis, urutannya tidak bisa dipastikan - dibiarkan
+        // apa adanya (perilaku lama) daripada menebak lalu salah menilai.
+        if (!isNaN(akhirP) && !(akhirQ < akhirP)) return;
+        if (isNaN(tersedia) || akhirQ > tersedia) tersedia = akhirQ;
+      });
+      if (!isNaN(tersedia)) tersediaSejak.set(p.id, tersedia);
+    });
+  });
+
+  return { tersediaSejak, tindakanTambahan };
+}
+
 export function calculatePatientTimeMetrics(
   patient: PatientItem,
   boxes: QueueBox[],
   now: number = Date.now(),
-  clampToServiceStart: boolean = true
+  clampToServiceStart: boolean = true,
+  // Jam saat pasien benar-benar tersedia untuk kotak ini (lihat bangunKonteksAntrean).
+  // Kalau tidak diisi, perhitungannya PERSIS seperti sebelumnya - semua pemanggil lama
+  // tidak berubah perilakunya sama sekali.
+  tersediaSejakMs?: number
 ): PatientTimeMetrics {
   const registeredAt = new Date(patient.createdAt);
   const regTime = registeredAt.getTime();
@@ -109,10 +223,19 @@ export function calculatePatientTimeMetrics(
   // ceklisnya sendiri, yang akan selalu menghasilkan durasi negatif / "Data Tidak Valid" palsu.
   const getEffectiveStartTime = (referenceTime: number): number => {
     if (isNaN(regTime)) return regTime;
-    if (!clampToServiceStart || isNaN(serviceStartTime) || serviceStartTime > referenceTime) {
-      return regTime;
+    let mulai = regTime;
+    if (clampToServiceStart && !isNaN(serviceStartTime) && serviceStartTime <= referenceTime) {
+      mulai = Math.max(mulai, serviceStartTime);
     }
-    return Math.max(regTime, serviceStartTime);
+    // Pasien tidak bisa berada di dua tempat sekaligus. Kalau tindakannya di kotak lain
+    // baru selesai jam sekian, kotak ini tidak mungkin mulai sebelum itu - jadi terapis
+    // di sini tidak pantas dinilai lambat karena menunggu kotak sebelumnya.
+    // Syarat <= referenceTime menjaga agar jam mulai tidak pernah melewati jam acuan
+    // akhirnya (yang akan menghasilkan durasi negatif / "Data Tidak Valid" palsu).
+    if (typeof tersediaSejakMs === 'number' && !isNaN(tersediaSejakMs) && tersediaSejakMs <= referenceTime) {
+      mulai = Math.max(mulai, tersediaSejakMs);
+    }
+    return mulai;
   };
 
   const calledAt = patient.lastCalledAt ? new Date(patient.lastCalledAt) : undefined;
@@ -230,6 +353,8 @@ export function calculatePatientTimeMetrics(
     isEnded,
     endedReason: patient.endedReason,
     endedAt: isEnded ? endedAtDate : undefined,
+    tersediaSejak: (typeof tersediaSejakMs === 'number' && !isNaN(tersediaSejakMs))
+      ? new Date(tersediaSejakMs) : undefined,
     formattedWait: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
     formattedResponseTime: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
     formattedService: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
@@ -242,7 +367,12 @@ export function computeResponseTimeAnalytics(
   boxes: QueueBox[],
   now: number = Date.now()
 ): ResponseTimeAnalyticsSummary {
-  const patientMetrics = patients.map(p => calculatePatientTimeMetrics(p, boxes, now));
+  const konteks = bangunKonteksAntrean(patients);
+  const patientMetrics = patients.map((p) => {
+    const m = calculatePatientTimeMetrics(p, boxes, now, true, konteks.tersediaSejak.get(p.id));
+    m.isTindakanTambahan = konteks.tindakanTambahan.has(p.id);
+    return m;
+  });
 
   const totalPatients = patientMetrics.length;
   // Kunjungan yang sudah ditutup (dipindahkan/dihapus) BUKAN pasien aktif - kalau ikut
@@ -253,7 +383,9 @@ export function computeResponseTimeAnalytics(
 
   // Data tidak valid (jam ceklis < jam input, biasanya akibat jam tablet salah/mundur) dikecualikan
   // dari rata-rata, distribusi, dan kepatuhan SPM supaya laporan tidak menyesatkan.
-  const completedMetrics = patientMetrics.filter(p => p.completed && !p.isDataInvalid);
+  const completedMetrics = patientMetrics.filter(
+    p => p.completed && !p.isDataInvalid && !p.isTindakanTambahan
+  );
 
   // Calculate Averages - Respon Time (Daftar -> Ceklis) hanya untuk pasien yang sudah selesai
   const allResponseMinutes = completedMetrics.map(p => p.responseTimeMinutes);
@@ -303,13 +435,18 @@ export function computeResponseTimeAnalytics(
       const activeBox = boxPatients.filter(p => !p.completed && !p.isEnded).length;
       const completedBox = boxPatients.filter(p => p.completed).length;
 
-      const boxCompletedMetrics = boxPatients.filter(p => p.completed && !p.isDataInvalid);
+      const boxCompletedMetrics = boxPatients.filter(p => p.completed && !p.isDataInvalid && !p.isTindakanTambahan);
 
       const bRespList = boxCompletedMetrics.map(p => p.responseTimeMinutes);
       const bAvgResp = bRespList.length > 0 ? Math.round(bRespList.reduce((a, b) => a + b, 0) / bRespList.length) : 0;
 
       const bCompliant = boxCompletedMetrics.filter(p => p.responseTimeMinutes <= 30).length;
-      const bComplianceRate = completedBox > 0 ? Math.round((bCompliant / completedBox) * 100) : 100;
+      // Penyebutnya HARUS himpunan yang sama dengan pembilangnya. Dulu memakai
+      // completedBox (yang ikut menghitung data tidak valid dan tindakan tambahan),
+      // sehingga kepatuhan terlihat lebih rendah dari yang sebenarnya.
+      const bComplianceRate = boxCompletedMetrics.length > 0
+        ? Math.round((bCompliant / boxCompletedMetrics.length) * 100)
+        : 100;
 
       const activeBoxPatients = boxPatients.filter(p => !p.completed && !p.isEnded);
       const longestActiveWaitMinutes = activeBoxPatients.length > 0 

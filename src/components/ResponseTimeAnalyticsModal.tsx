@@ -208,7 +208,9 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
   const filteredPatients = analytics.patientMetrics.filter((p) => {
     if (filterBoxId !== 'all' && p.boxId !== filterBoxId) return false;
     if (filterStatus === 'waiting' && (p.completed || p.isEnded)) return false;
-    if (filterStatus === 'delayed' && (p.waitMinutes <= 30 || p.isEnded)) return false;
+    // Tindakan tambahan tidak ikut peringkat keterlambatan - ia memang dikecualikan
+    // dari hitungan SPM, jadi menampilkannya sebagai "terlambat" hanya menyesatkan.
+    if (filterStatus === 'delayed' && (p.waitMinutes <= 30 || p.isEnded || p.isTindakanTambahan)) return false;
     if (filterStatus === 'completed' && !p.completed) return false;
 
     if (searchQuery.trim()) {
@@ -928,6 +930,14 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
                             </td>
 
                             <td className="p-3 text-center">
+                              {p.isTindakanTambahan && (
+                                <span
+                                  className="block mb-1 px-2 py-0.5 bg-violet-100 text-violet-800 rounded font-bold text-[10px]"
+                                  title="Pasien ini diantrekan lebih dari sekali di kotak yang sama karena tindakannya banyak. Tetap dihitung penuh sebagai beban kerja terapis, tapi tidak ikut dihitung dalam rata-rata respon time maupun kepatuhan SPM - karena ini bukan pasien yang sedang menunggu dilayani."
+                                >
+                                  Tindakan tambahan
+                                </span>
+                              )}
                               {p.isDataInvalid ? (
                                 <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded font-bold text-[10px]" title="Jam ceklis selesai tercatat lebih awal dari jam input, kemungkinan jam tablet salah/mundur">
                                   ⚠ Data Tidak Valid
