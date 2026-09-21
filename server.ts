@@ -937,6 +937,25 @@ function saveSecurityConfig(data: { appPassword?: string; databasePassword?: str
   }
 }
 
+// Tanggal sebuah KUNJUNGAN ditentukan oleh kapan pasien itu DIDAFTARKAN, bukan oleh
+// tanggal saat sinkronisasi kebetulan berjalan.
+//
+// Sebelumnya SELURUH pasien yang masih ada di antrean ditulis ulang ke tanggal HARI INI
+// setiap kali sinkronisasi berjalan, sementara catatannya di tanggal kemarin TETAP ADA.
+// Akibatnya satu kunjungan yang melewati tengah malam tercatat DUA KALI - muncul di
+// register kemarin DAN register hari ini - lalu ikut terhitung dua kali di rekap bulanan
+// dan SPM. Pasien yang menginap dua malam terhitung tiga kali.
+//
+// Dengan aturan ini satu kunjungan selalu milik SATU tanggal saja: tanggal ia didaftarkan.
+function tanggalKunjungan(v: any, cadangan: string): string {
+  const sumber = v && (v.registeredAt || v.createdAt);
+  if (sumber) {
+    const t = new Date(sumber);
+    if (!isNaN(t.getTime())) return getLocalDateStringWIB(t);
+  }
+  return cadangan;
+}
+
 // Helper: sync patient array to today's daily archive and update master patient visits
 function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   if (!Array.isArray(patients) || patients.length === 0) return;
@@ -966,9 +985,14 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
         fieldChanged = true;
       }
 
-      // Update last visited date and increment if new visit day
-      if (current.lastVisitDate !== today) {
-        current.lastVisitDate = today;
+      // Update last visited date and increment if new visit day.
+      // Memakai tanggal kunjungan pasien ini sendiri, BUKAN tanggal hari ini: pasien
+      // yang masih di antrean saat hari berganti bukan kunjungan baru, jadi tidak boleh
+      // menambah hitungan lagi. Syarat "hanya maju" menjaga agar catatan kunjungan
+      // terakhir tidak pernah tertarik mundur oleh data lama yang masuk belakangan.
+      const tglKunjungan = tanggalKunjungan(p, today);
+      if (!current.lastVisitDate || tglKunjungan > current.lastVisitDate) {
+        current.lastVisitDate = tglKunjungan;
         current.totalVisits = (current.totalVisits || 1) + 1;
         fieldChanged = true;
       }
@@ -1002,8 +1026,8 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
         defaultDiagnosis: p.diagnosis || '',
         defaultActionCode: p.actionCode || '',
         notes: p.note || '',
-        registeredDate: today,
-        lastVisitDate: today,
+        registeredDate: tanggalKunjungan(p, today),
+        lastVisitDate: tanggalKunjungan(p, today),
         totalVisits: 1,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1016,10 +1040,12 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
     saveMasterPatients(masterPatients);
   }
 
-  // 2. ACCUMULATIVE Sync to Daily Archive for today (DO NOT OVERWRITE OR WIPE PREVIOUS PATIENTS OF TODAY)
+  // 2. ACCUMULATIVE Sync to Daily Archive (DO NOT OVERWRITE OR WIPE PREVIOUS PATIENTS)
   // Hanya baca+tulis file arsip bulan berjalan, bukan seluruh riwayat.
-  const existingVisits = loadDailyArchiveForDate(today);
-  const visitsMap = new Map<string, any>();
+  //
+  // Pasien dikelompokkan menurut TANGGAL KUNJUNGANNYA MASING-MASING, lalu tiap kelompok
+  // ditulis ke berkas tanggalnya sendiri. Dulu semuanya dipaksa ke tanggal hari ini,
+  // sehingga pasien yang melewati tengah malam tercatat dua kali (lihat tanggalKunjungan).
   const stateSekarang = loadStateFromFile();
   const currentBoxes = (boxes && Array.isArray(boxes))
     ? boxes
@@ -1032,21 +1058,32 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
       : []
   );
 
-  // Keep all existing visits recorded today
+  const perTanggal = new Map<string, any[]>();
+  patients.forEach((p) => {
+    if (!p || !p.id || !p.patientName || !p.medicalRecordNo) return;
+    const tgl = tanggalKunjungan(p, today);
+    const daftar = perTanggal.get(tgl);
+    if (daftar) daftar.push(p); else perTanggal.set(tgl, [p]);
+  });
+
+  perTanggal.forEach((daftarPasien, tglArsip) => {
+  const existingVisits = loadDailyArchiveForDate(tglArsip);
+  const visitsMap = new Map<string, any>();
+
+  // Keep all existing visits recorded on that date
   existingVisits.forEach((v: any) => {
     if (v && v.id) visitsMap.set(v.id, v);
   });
 
   // Upsert incoming active patients
-  patients.forEach((p) => {
-    if (!p || !p.id || !p.patientName || !p.medicalRecordNo) return;
+  daftarPasien.forEach((p) => {
     const prev = visitsMap.get(p.id) || {};
     const boxMatch = currentBoxes.find((b: any) => b.id === (p.boxId || prev.boxId));
 
     visitsMap.set(p.id, {
       ...prev,
       id: p.id,
-      visitDate: today,
+      visitDate: tglArsip,
       patientId: p.patientId || p.id,
       medicalRecordNo: p.medicalRecordNo.trim(),
       patientName: p.patientName.trim(),
@@ -1084,7 +1121,8 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
     });
   });
 
-  saveDailyArchiveForDate(today, Array.from(visitsMap.values()));
+  saveDailyArchiveForDate(tglArsip, Array.from(visitsMap.values()));
+  });
 }
 
 // Debounced master patient & daily archive synchronization helper
@@ -3810,7 +3848,11 @@ app.post('/api/daily-database/visit', async (req, res) => {
   try {
     const { date, visit } = req.body;
     const today = getLocalDateStringWIB();
-    const targetDate = date || today;
+    // Tanggal diambil dari kapan pasien DIDAFTARKAN, bukan dari tanggal yang kebetulan
+    // dikirim perangkat (yang selalu "hari ini"). Tanpa ini, pasien sisa semalam yang
+    // baru ditutup pagi ini akan tercatat lagi di tanggal hari ini - padahal
+    // kunjungannya milik kemarin.
+    const targetDate = tanggalKunjungan(visit, date || today);
     if (!visit || !visit.patientName || !visit.medicalRecordNo) {
       return res.status(400).json({ error: 'Data kunjungan pasien tidak lengkap' });
     }
@@ -3910,16 +3952,27 @@ app.post('/api/daily-database/batch', async (req, res) => {
     }
 
     await enqueueQueueWrite(async () => {
-      const existing = loadDailyArchiveForDate(date);
-      const map = new Map<string, any>();
-      existing.forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
+      // Tiap kunjungan masuk ke berkas TANGGALNYA SENDIRI (tanggal pasien didaftarkan),
+      // bukan ke satu tanggal yang dikirim perangkat. Ini yang membuat pembersihan
+      // antrean pagi hari tidak memindahkan kunjungan semalam ke tanggal hari ini.
+      const perTanggal = new Map<string, any[]>();
       visits.forEach((v: any) => {
-        if (v && v.id) {
-          const prev = map.get(v.id);
-          map.set(v.id, { ...prev, ...v, visitDate: date });
-        }
+        if (!v || !v.id) return;
+        const tgl = tanggalKunjungan(v, date);
+        const daftar = perTanggal.get(tgl);
+        if (daftar) daftar.push(v); else perTanggal.set(tgl, [v]);
       });
-      saveDailyArchiveForDate(date, Array.from(map.values()));
+
+      perTanggal.forEach((daftar, tgl) => {
+        const existing = loadDailyArchiveForDate(tgl);
+        const map = new Map<string, any>();
+        existing.forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
+        daftar.forEach((v: any) => {
+          const prev = map.get(v.id);
+          map.set(v.id, { ...prev, ...v, visitDate: tgl });
+        });
+        saveDailyArchiveForDate(tgl, Array.from(map.values()));
+      });
     });
 
     res.json({ status: 'ok', count: visits.length });
@@ -3947,15 +4000,22 @@ app.get('/api/monthly-report', (req, res) => {
       dailyArchive = loadDailyArchiveForMonth(monthPrefix);
     }
 
-    // Collect all visits in this month
+    // Collect all visits in this month.
+    // JARING PENGAMAN: satu id kunjungan hanya boleh dihitung SEKALI, walau berkas
+    // arsip lama masih menyimpannya di lebih dari satu tanggal (data yang terlanjur
+    // terbentuk sebelum aturan tanggalKunjungan dipasang). Tanpa ini satu pasien yang
+    // melewati tengah malam terhitung dua kali di jumlah kunjungan dan di SPM.
+    // Yang dipertahankan adalah tanggal PALING AWAL - yaitu tanggal ia didaftarkan.
+    const monthlyById = new Map<string, any>();
     const allMonthlyVisits: any[] = [];
-    Object.keys(dailyArchive).forEach((dateKey) => {
+    Object.keys(dailyArchive).sort().forEach((dateKey) => {
       if (dateKey.startsWith(monthPrefix) && Array.isArray(dailyArchive[dateKey])) {
         dailyArchive[dateKey].forEach((v: any) => {
-          allMonthlyVisits.push({
-            ...v,
-            visitDate: dateKey
-          });
+          const kunjungan = { ...v, visitDate: dateKey };
+          if (!v || !v.id) { allMonthlyVisits.push(kunjungan); return; }
+          if (monthlyById.has(v.id)) return;
+          monthlyById.set(v.id, kunjungan);
+          allMonthlyVisits.push(kunjungan);
         });
       }
     });
