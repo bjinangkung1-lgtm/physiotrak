@@ -353,18 +353,41 @@ export function pickCompletionState(
   const exValid = !isNaN(exMs);
   const inValid = !isNaN(inMs);
 
+  // MUNDURNYA STATUS CEKLIS (sudah selesai -> kembali belum) hanya boleh menang kalau
+  // BISA DIBUKTIKAN lebih baru: kedua sisi berstempel, dan stempel yang masuk benar-benar
+  // lebih baru. Kalau tidak bisa dibuktikan, ceklis dipertahankan.
+  //
+  // KENAPA: dulu sisi yang masuk menang begitu saja asal IA berstempel, walau sisi yang
+  // sudah selesai tidak berstempel sama sekali. Padahal catatan yang tidak berstempel itu
+  // justru yang paling tua - mis. pasien lama, atau salinan papan antrean yang dipulihkan
+  // dari cadangan. Akibatnya pasien yang sudah diceklis bisa kembali "belum selesai"
+  // dengan sendirinya, dan kemundurannya ikut tertulis ke register harian lewat
+  // sinkronisasi. Persis itu yang terjadi pada 22 September 2026 dini hari: empat pasien
+  // yang sudah selesai kembali berstatus menunggu tanpa ada yang menyentuhnya.
+  //
+  // Arah sebaliknya (belum selesai -> selesai) sengaja TIDAK diperketat: menambahkan
+  // ceklis tidak menghilangkan pekerjaan siapa pun, sedangkan membatalkannya iya.
+  const exDone = Boolean(existing && existing.completed);
+  const inDone = Boolean(incoming && incoming.completed);
+  if (exDone && !inDone) {
+    const bolehMundur = exValid && inValid && inMs > exMs;
+    return bolehMundur
+      ? { completed: false, completionUpdatedAt: incoming.completionUpdatedAt }
+      : { completed: true, completionUpdatedAt: existing.completionUpdatedAt };
+  }
+
   if (exValid && inValid) {
     return inMs >= exMs
-      ? { completed: Boolean(incoming.completed), completionUpdatedAt: incoming.completionUpdatedAt }
-      : { completed: Boolean(existing.completed), completionUpdatedAt: existing.completionUpdatedAt };
+      ? { completed: inDone, completionUpdatedAt: incoming.completionUpdatedAt }
+      : { completed: exDone, completionUpdatedAt: existing.completionUpdatedAt };
   }
   if (inValid) {
-    return { completed: Boolean(incoming.completed), completionUpdatedAt: incoming.completionUpdatedAt };
+    return { completed: inDone, completionUpdatedAt: incoming.completionUpdatedAt };
   }
   if (exValid) {
-    return { completed: Boolean(existing.completed), completionUpdatedAt: existing.completionUpdatedAt };
+    return { completed: exDone, completionUpdatedAt: existing.completionUpdatedAt };
   }
-  return { completed: Boolean((incoming && incoming.completed) || (existing && existing.completed)), completionUpdatedAt: undefined };
+  return { completed: exDone || inDone, completionUpdatedAt: undefined };
 }
 
 // Helper function to safely merge incoming patient array with current state (prevents accidental wiping on cold start)

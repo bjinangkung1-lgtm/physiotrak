@@ -2016,6 +2016,89 @@ function handleFirestoreQuotaError(err: any, label: string): boolean {
   return isQuotaError;
 }
 
+// Gabungkan cadangan papan antrean yang SUDAH ADA di awan dengan yang mau ditulis.
+//
+// KENAPA: berbeda dari arsip harian yang sudah kita lindungi, snapshot papan antrean
+// dulu ditulis dengan setDoc apa adanya - menimpa utuh, tanpa membaca lebih dulu dan
+// tanpa penjaga. Artinya instance mana pun yang kebetulan gambarannya kurang lengkap
+// langsung menjadikan kekurangannya sebagai kebenaran baru di awan, dan saat wadah
+// server berikutnya menyala ia memulihkan versi yang sudah cacat itu. Kerusakannya
+// lalu mengalir ke register harian lewat sinkronisasi. Ini kelas kerusakan yang sama
+// dengan 19 September 2026, hanya di bagian yang saat itu belum ikut ditutup.
+//
+// Penggabungan ini TIDAK menghalangi penghapusan yang sah: pasien yang memang dihapus
+// atau dibersihkan tetap tersaring lewat tombstone, dan "Bersihkan Antrean" tetap bisa
+// mengosongkan papan sepenuhnya.
+function gabungkanSnapshotAntrean(cloud: any, lokal: any): { hasil: any; ditahan: string[] } {
+  if (!cloud || typeof cloud !== 'object') return { hasil: lokal, ditahan: [] };
+  if (!lokal || typeof lokal !== 'object') return { hasil: lokal, ditahan: [] };
+
+  // Reset yang sah HARUS tetap bisa mengosongkan papan - penahan permanen yang menjaga
+  // agar pasien lamanya tidak hidup lagi, bukan penggabungan ini.
+  if (lokal.isExplicitReset === true && (!Array.isArray(lokal.patients) || lokal.patients.length === 0)) {
+    return { hasil: lokal, ditahan: [] };
+  }
+
+  const tombstone = new Set<string>([
+    ...(Array.isArray(lokal.deletedPatientIds) ? lokal.deletedPatientIds : []),
+    ...(Array.isArray(lokal.preResetPatientIds) ? lokal.preResetPatientIds : []),
+    ...Array.from(tombstoneResetPermanen),
+  ].filter(Boolean).map(String));
+
+  const kotakDihapus = new Set<string>(
+    (Array.isArray(lokal.deletedBoxIds) ? lokal.deletedBoxIds : []).filter(Boolean).map(String)
+  );
+
+  const peta = new Map<string, any>();
+  for (const p of (Array.isArray(cloud.patients) ? cloud.patients : [])) {
+    if (p && p.id && !tombstone.has(String(p.id))) peta.set(String(p.id), p);
+  }
+  for (const p of (Array.isArray(lokal.patients) ? lokal.patients : [])) {
+    if (!p || !p.id) continue;
+    const id = String(p.id);
+    if (tombstone.has(id)) { peta.delete(id); continue; }
+    const sisiAwan = peta.get(id);
+    if (!sisiAwan) { peta.set(id, p); continue; }
+    // Kolom lain: sisi lokal menang (dialah yang baru saja memproses perubahan).
+    // Status ceklis: diputuskan pickCompletionState supaya tidak bisa mundur tanpa bukti.
+    const { completed, completionUpdatedAt } = pickCompletionState(sisiAwan, p);
+    peta.set(id, {
+      ...sisiAwan,
+      ...p,
+      completed,
+      completionUpdatedAt,
+      completedAt: completed ? (p.completedAt || sisiAwan.completedAt) : undefined,
+    });
+  }
+
+  const petaKotak = new Map<string, any>();
+  for (const b of (Array.isArray(cloud.boxes) ? cloud.boxes : [])) {
+    if (b && b.id && !kotakDihapus.has(String(b.id))) petaKotak.set(String(b.id), b);
+  }
+  for (const b of (Array.isArray(lokal.boxes) ? lokal.boxes : [])) {
+    if (!b || !b.id) continue;
+    const id = String(b.id);
+    if (kotakDihapus.has(id)) { petaKotak.delete(id); continue; }
+    petaKotak.set(id, { ...petaKotak.get(id), ...b });
+  }
+
+  const hasil = {
+    ...lokal,
+    patients: Array.from(peta.values()),
+    boxes: Array.from(petaKotak.values()),
+  };
+
+  // Penjaga terakhir: kalau hasil gabungan JUSTRU kehilangan pasien yang ada di awan dan
+  // tidak pernah dihapus, batalkan penulisannya. Dengan penggabungan di atas ini
+  // seharusnya mustahil - justru itu gunanya, supaya kekeliruan di kemudian hari
+  // tertahan di sini, bukan baru diketahui setelah data hilang.
+  const ditahan = (Array.isArray(cloud.patients) ? cloud.patients : [])
+    .filter((p: any) => p && p.id && !tombstone.has(String(p.id)) && !peta.has(String(p.id)))
+    .map((p: any) => String(p.id));
+
+  return { hasil, ditahan };
+}
+
 async function flushQueueStateMirrorNow(): Promise<void> {
   if (mirrorDebounceTimer) {
     clearTimeout(mirrorDebounceTimer);
@@ -2030,8 +2113,36 @@ async function flushQueueStateMirrorNow(): Promise<void> {
   const currentState = pendingMirrorState;
   if (!currentState) return;
 
+  // Menunda pencadangan tanpa membuang datanya - sama seperti pola arsip harian.
+  // Lebih baik telat mencadangkan daripada menimpa cadangan yang masih baik.
+  const tundaPapanDanCobaLagi = (alasan: string) => {
+    pendingMirrorState = currentState;
+    console.warn(`[FirestoreMirror] ${alasan} - pencadangan papan antrean DITUNDA, data lokal tidak dibuang dan akan dicoba lagi.`);
+    if (!mirrorDebounceTimer) {
+      mirrorDebounceTimer = setTimeout(() => { void flushQueueStateMirrorNow(); }, 30000);
+    }
+  };
+
   try {
-    const sanitized = JSON.parse(JSON.stringify(currentState));
+    // Baca dulu apa yang SUDAH ada di cadangan, lalu gabungkan. Penulisan tidak boleh
+    // lagi menimpa buta (lihat gabungkanSnapshotAntrean).
+    let cloudState: any = null;
+    try {
+      const snapshot = await getDoc(QUEUE_STATE_DOC_REF);
+      cloudState = snapshot.exists() ? snapshot.data() : null;
+    } catch (readErr: any) {
+      if (handleFirestoreQuotaError(readErr, 'FirestoreMirror-Read')) return;
+      tundaPapanDanCobaLagi('Tidak bisa membaca cadangan papan yang sekarang');
+      return;
+    }
+
+    const { hasil, ditahan } = gabungkanSnapshotAntrean(cloudState, currentState);
+    if (ditahan.length > 0) {
+      tundaPapanDanCobaLagi(`Penulisan dibatalkan karena akan menghilangkan ${ditahan.length} pasien yang masih ada di cadangan`);
+      return;
+    }
+
+    const sanitized = JSON.parse(JSON.stringify(hasil));
     await setDoc(QUEUE_STATE_DOC_REF, {
       ...sanitized,
       lastMirroredAt: new Date().toISOString(),
@@ -2803,18 +2914,41 @@ function pickCompletionState(
   const exValid = !isNaN(exMs);
   const inValid = !isNaN(inMs);
 
+  // MUNDURNYA STATUS CEKLIS (sudah selesai -> kembali belum) hanya boleh menang kalau
+  // BISA DIBUKTIKAN lebih baru: kedua sisi berstempel, dan stempel yang masuk benar-benar
+  // lebih baru. Kalau tidak bisa dibuktikan, ceklis dipertahankan.
+  //
+  // KENAPA: dulu sisi yang masuk menang begitu saja asal IA berstempel, walau sisi yang
+  // sudah selesai tidak berstempel sama sekali. Padahal catatan yang tidak berstempel itu
+  // justru yang paling tua - mis. pasien lama, atau salinan papan antrean yang dipulihkan
+  // dari cadangan. Akibatnya pasien yang sudah diceklis bisa kembali "belum selesai"
+  // dengan sendirinya, dan kemundurannya ikut tertulis ke register harian lewat
+  // sinkronisasi. Persis itu yang terjadi pada 22 September 2026 dini hari: empat pasien
+  // yang sudah selesai kembali berstatus menunggu tanpa ada yang menyentuhnya.
+  //
+  // Arah sebaliknya (belum selesai -> selesai) sengaja TIDAK diperketat: menambahkan
+  // ceklis tidak menghilangkan pekerjaan siapa pun, sedangkan membatalkannya iya.
+  const exDone = Boolean(existing && existing.completed);
+  const inDone = Boolean(incoming && incoming.completed);
+  if (exDone && !inDone) {
+    const bolehMundur = exValid && inValid && inMs > exMs;
+    return bolehMundur
+      ? { completed: false, completionUpdatedAt: incoming.completionUpdatedAt }
+      : { completed: true, completionUpdatedAt: existing.completionUpdatedAt };
+  }
+
   if (exValid && inValid) {
     return inMs >= exMs
-      ? { completed: Boolean(incoming.completed), completionUpdatedAt: incoming.completionUpdatedAt }
-      : { completed: Boolean(existing.completed), completionUpdatedAt: existing.completionUpdatedAt };
+      ? { completed: inDone, completionUpdatedAt: incoming.completionUpdatedAt }
+      : { completed: exDone, completionUpdatedAt: existing.completionUpdatedAt };
   }
   if (inValid) {
-    return { completed: Boolean(incoming.completed), completionUpdatedAt: incoming.completionUpdatedAt };
+    return { completed: inDone, completionUpdatedAt: incoming.completionUpdatedAt };
   }
   if (exValid) {
-    return { completed: Boolean(existing.completed), completionUpdatedAt: existing.completionUpdatedAt };
+    return { completed: exDone, completionUpdatedAt: existing.completionUpdatedAt };
   }
-  return { completed: Boolean((incoming && incoming.completed) || (existing && existing.completed)), completionUpdatedAt: undefined };
+  return { completed: exDone || inDone, completionUpdatedAt: undefined };
 }
 
 function reconcileQueueStates(existingState: any, incomingPayload: any) {
@@ -3923,10 +4057,18 @@ app.post('/api/daily-database/visit', async (req, res) => {
               // dan siapa yang tiba lebih dulu menentukan hasilnya, sehingga pembatalan
               // ceklis kadang bertahan kadang balik lagi. Kolom lain tetap disinkronkan.
               // Pasien lama yang belum berstempel tetap memakai perilaku lama.
+              // Arsip harian TIDAK PERNAH menyimpan completionUpdatedAt, jadi tambalan dari
+              // sana tidak akan pernah bisa membuktikan bahwa pembatalan ceklisnya lebih
+              // baru. Karena itu ia tidak boleh MEMUNDURKAN status ceklis pasien di papan.
+              // Dulu pengecualiannya ada pada pasien yang belum berstempel - dan justru
+              // pasien itulah yang paling rawan, karena catatan tak berstempel selalu yang
+              // paling tua. Arah sebaliknya (ikut menandai selesai) tetap diizinkan, sebab
+              // itu menambah pekerjaan yang tercatat, bukan menghapusnya.
               const { completed: _vc, completedAt: _vca, ...visitWithoutCompletion } = updatedVisit as any;
-              currentState.patients[existingQueueIdx] = queuePatient.completionUpdatedAt
-                ? { ...queuePatient, ...visitWithoutCompletion }
-                : { ...queuePatient, ...updatedVisit };
+              const bolehIkutMenandaiSelesai = !queuePatient.completed && updatedVisit.completed === true;
+              currentState.patients[existingQueueIdx] = bolehIkutMenandaiSelesai
+                ? { ...queuePatient, ...updatedVisit }
+                : { ...queuePatient, ...visitWithoutCompletion };
               currentState.lastUpdated = new Date().toISOString();
               saveStateToFile(currentState);
               broadcastUpdate({ type: 'SYNC_STATE', state: currentState });
