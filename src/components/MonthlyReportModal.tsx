@@ -3,6 +3,7 @@ import { X, FileText, Download, FileSpreadsheet, Calendar, CheckCircle2, User, U
 import { QueueBox, PatientItem, DailyPatientVisit } from '../types';
 import { exportMonthlyTherapistPDF, exportMonthlyTherapistExcel, MonthlyReportData } from '../utils/export';
 import { cloudDatabaseService } from '../utils/cloudDatabaseService';
+import { getCanonicalTherapistKey } from '../utils/savedOfficersService';
 
 interface MonthlyReportModalProps {
   isOpen: boolean;
@@ -26,7 +27,6 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [monthlyVisits, setMonthlyVisits] = useState<DailyPatientVisit[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  // Drill-down: tabel harian untuk 1 terapis, dibuka dengan klik nama terapisnya
   const [drilldownTherapist, setDrilldownTherapist] = useState<string | null>(null);
   const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
 
@@ -166,11 +166,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
       calledCount: p.calledCount || 1,
     }));
 
-  // Group patients by KOTAK (boxId), bukan nama mentah - boxId adalah identitas permanen
-  // (tidak pernah berubah walau nama/gelar di kotak diedit-edit), jadi ini cara paling
-  // pasti untuk menyatukan kunjungan lama & baru milik terapis yang sama walau tercatat
-  // dengan ejaan/gelar berbeda dari waktu ke waktu (mis. "Bambang Jinangkung SST.Ftr" vs
-  // "BAMBANG JINANGKUNG").
+  // Group patients by Therapist / Officer Name (utilizing canonical key to merge name variants)
   interface TherapistGroup {
     therapistName: string;
     canonicalKey: string;
@@ -190,10 +186,11 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
   if (isCurrentMonth) {
     boxes.forEach(box => {
       const name = (box.officerName || box.title || '').trim();
-      if (name && !therapistMap.has(box.id)) {
-        therapistMap.set(box.id, {
+      const canonicalKey = getCanonicalTherapistKey(box.officerName, box.location, box.id);
+      if (name && !therapistMap.has(canonicalKey)) {
+        therapistMap.set(canonicalKey, {
           therapistName: box.officerName || box.title,
-          canonicalKey: box.id,
+          canonicalKey,
           boxId: box.id,
           boxTitle: box.title,
           location: box.location,
@@ -217,17 +214,20 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
     const boxTitle = frozenBoxTitle || fallbackBox?.title || (frozenOfficer ? `Kotak ${frozenOfficer}` : 'Ruangan');
     const location = fallbackBox?.location || '-';
 
-    const groupKey = p.boxId || `unknown-${therapistName}`;
+    const canonicalKey = getCanonicalTherapistKey(frozenOfficer, location, p.boxId);
 
-    if (!therapistMap.has(groupKey)) {
-      // Kotaknya masih aktif sekarang -> pakai nama bersih kotak itu supaya kunjungan
-      // lama & baru muncul di bawah nama yang sama.
-      therapistMap.set(groupKey, {
-        therapistName: fallbackBox?.officerName?.trim() || therapistName,
-        canonicalKey: groupKey,
-        boxId: groupKey,
-        boxTitle: fallbackBox?.title?.trim() || boxTitle,
-        location,
+    if (!therapistMap.has(canonicalKey)) {
+      // Kalau terapis ini masih punya kotak aktif sekarang (biarpun ID kotaknya
+      // sudah beda dari yang tercatat di kunjungan lama), pakai nama bersihnya
+      // sebagai nama tampilan supaya kunjungan lama & baru tetap muncul di bawah
+      // nama yang sama.
+      const liveBox = boxes.find(b => getCanonicalTherapistKey(b.officerName, b.location, b.id) === canonicalKey);
+      therapistMap.set(canonicalKey, {
+        therapistName: liveBox?.officerName?.trim() || therapistName,
+        canonicalKey,
+        boxId: p.boxId || liveBox?.id || (fallbackBox ? fallbackBox.id : 'unknown'),
+        boxTitle: liveBox?.title?.trim() || boxTitle,
+        location: liveBox?.location || location,
         patients: [],
         actionCounts: {},
         ranapCount: 0,
@@ -235,7 +235,7 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
       });
     }
 
-    const group = therapistMap.get(groupKey)!;
+    const group = therapistMap.get(canonicalKey)!;
     group.patients.push(p);
 
     if (p.isRanap) {
@@ -270,7 +270,6 @@ export const MonthlyReportModal: React.FC<MonthlyReportModalProps> = ({
     }).filter(g => g.patients.length > 0 || g.therapistName.toLowerCase().includes(q));
   }
 
-  // Rincian harian untuk terapis yang sedang di-drill-down (klik nama terapis)
   interface DailyBreakdown {
     date: string;
     total: number;

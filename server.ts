@@ -269,42 +269,25 @@ function saveMasterPatients(patients: any[]) {
   mirrorMasterPatientsToFirestore(patients);
 }
 
-// Daily Archive File Helpers - Map tanggal (YYYY-MM-DD) -> daftar DailyPatientVisit,
-// disimpan SATU FILE PER BULAN (data/daily_archive/YYYY-MM.json) alih-alih satu file
-// raksasa berisi seluruh riwayat sejak awal aplikasi dipakai. Alasannya: dulu setiap
-// perubahan 1 pasien memicu baca+tulis SELURUH riwayat (bisa bertahun-tahun) secara
-// synchronous (blocking event loop, jadi seluruh server macet sesaat untuk SEMUA
-// perangkat yang sedang connect) - dan file itu makin besar & makin lambat setiap
-// hari. Dengan dipecah per-bulan, tiap penyimpanan HANYA menyentuh file bulan
-// berjalan (kecil & cepat, ukurannya tidak pernah bertambah dari bulan ke bulan).
-// TIDAK ADA DATA YANG DIHAPUS - hanya dikelompokkan ulang; laporan lintas-bulan/
-// tahun (remunerasi, rekap bulanan, backup) tetap membaca seluruh bulan yang relevan.
+// Daily Archive File Helpers (Partitioned by month: data/daily_archive/YYYY-MM.json)
 function monthKeyOfDate(dateKey: string): string {
   return dateKey.slice(0, 7);
 }
-
 function archiveMonthFilePath(monthKey: string): string {
   return path.join(DAILY_ARCHIVE_DIR, `${monthKey}.json`);
 }
-
 function loadArchiveMonth(monthKey: string): Record<string, any[]> {
   try {
     const p = archiveMonthFilePath(monthKey);
     if (fs.existsSync(p)) {
       const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      if (parsed && typeof parsed === 'object') {
-        return parsed;
-      }
+      if (parsed && typeof parsed === 'object') return parsed;
     }
   } catch (err) {
     console.error(`Error reading archive month ${monthKey}:`, err);
   }
   return {};
 }
-
-// Tulis ke disk saja, TANPA memicu mirror ke Firestore - dipakai saat memulihkan
-// data DARI Firestore, supaya tidak langsung menulis balik ke dokumen yang baru
-// saja dibaca.
 function saveArchiveMonthLocalOnly(monthKey: string, data: Record<string, any[]>) {
   try {
     if (!fs.existsSync(DAILY_ARCHIVE_DIR)) fs.mkdirSync(DAILY_ARCHIVE_DIR, { recursive: true });
@@ -313,12 +296,10 @@ function saveArchiveMonthLocalOnly(monthKey: string, data: Record<string, any[]>
     console.error(`Error writing archive month ${monthKey}:`, err);
   }
 }
-
 function saveArchiveMonth(monthKey: string, data: Record<string, any[]>) {
   saveArchiveMonthLocalOnly(monthKey, data);
   mirrorArchiveMonthToFirestore(monthKey, data);
 }
-
 function listArchiveMonthKeys(): string[] {
   try {
     if (!fs.existsSync(DAILY_ARCHIVE_DIR)) return [];
@@ -331,29 +312,19 @@ function listArchiveMonthKeys(): string[] {
     return [];
   }
 }
-
-// Baca kunjungan untuk SATU tanggal saja - hanya menyentuh file bulan tanggal itu.
 function loadDailyArchiveForDate(date: string): any[] {
   return loadArchiveMonth(monthKeyOfDate(date))[date] || [];
 }
-
-// Tulis kunjungan untuk SATU tanggal saja - hanya menyentuh file bulan tanggal itu.
 function saveDailyArchiveForDate(date: string, visits: any[]) {
   const monthKey = monthKeyOfDate(date);
   const monthData = loadArchiveMonth(monthKey);
   monthData[date] = visits;
   saveArchiveMonth(monthKey, monthData);
 }
-
-// Baca seluruh tanggal dalam SATU bulan (mis. untuk rekap/laporan bulanan) -
-// hanya menyentuh 1 file.
 function loadDailyArchiveForMonth(monthKey: string): Record<string, any[]> {
   return loadArchiveMonth(monthKey);
 }
-
-// Baca seluruh tanggal dalam SATU tahun (mis. untuk grafik kunjungan tahunan) -
-// hanya menyentuh maksimal 12 file, bukan seluruh riwayat sejak awal.
-function loadDailyArchiveForYear(year: number): Record<string, any[]> {
+function loadDailyArchiveForYear(year: number | string): Record<string, any[]> {
   const result: Record<string, any[]> = {};
   for (let m = 1; m <= 12; m++) {
     const monthKey = `${year}-${String(m).padStart(2, '0')}`;
@@ -361,9 +332,6 @@ function loadDailyArchiveForYear(year: number): Record<string, any[]> {
   }
   return result;
 }
-
-// Daftar SEMUA tanggal yang pernah tercatat, diurutkan terbaru dulu - dipakai untuk
-// dropdown pemilih tanggal, jadi cuma perlu key-nya saja (bukan seluruh data kunjungan).
 function listAllArchiveDateKeys(): string[] {
   const dates: string[] = [];
   for (const monthKey of listArchiveMonthKeys()) {
@@ -371,10 +339,6 @@ function listAllArchiveDateKeys(): string[] {
   }
   return dates.sort().reverse();
 }
-
-// Baca SELURUH riwayat lintas semua bulan - HANYA dipakai untuk operasi jarang
-// seperti export/restore backup lengkap, jangan dipanggil pada jalur yang berjalan
-// setiap ada perubahan pasien.
 function loadFullDailyArchive(): Record<string, any[]> {
   const result: Record<string, any[]> = {};
   for (const monthKey of listArchiveMonthKeys()) {
@@ -382,20 +346,13 @@ function loadFullDailyArchive(): Record<string, any[]> {
   }
   return result;
 }
-
-// Ratakan objek arsip yang mungkin punya kunci non-tanggal yang membungkus
-// tanggal-tanggal lain di dalamnya (mis. ditemukan kunci "archives" berisi
-// {"2026-09-08": [...]} bersebelahan dengan tanggal-tanggal biasa di level atas -
-// kemungkinan sisa bug penyimpanan versi lama). Ditelusuri rekursif supaya TIDAK
-// ADA kunjungan yang diam-diam terlewat/hilang saat migrasi hanya karena
-// strukturnya tidak rata.
 function flattenArchiveDates(raw: any, out: Record<string, any[]> = {}): Record<string, any[]> {
   if (!raw || typeof raw !== 'object') return out;
   Object.keys(raw).forEach((key) => {
     const value = raw[key];
     if (/^\d{4}-\d{2}-\d{2}$/.test(key) && Array.isArray(value)) {
       const existing = out[key] || [];
-      const map = new Map<string, any>();
+      const map = new Map();
       existing.forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
       value.forEach((v: any) => { if (v && v.id) map.set(v.id, v); });
       out[key] = Array.from(map.values());
@@ -405,9 +362,6 @@ function flattenArchiveDates(raw: any, out: Record<string, any[]> = {}): Record<
   });
   return out;
 }
-
-// Tulis SELURUH objek arsip (mis. dari restore backup lama berformat satu-file),
-// otomatis dipecah ulang per bulan.
 function saveFullDailyArchive(archive: Record<string, any[]>) {
   const flattened = flattenArchiveDates(archive);
   const byMonth = new Map<string, Record<string, any[]>>();
@@ -418,10 +372,6 @@ function saveFullDailyArchive(archive: Record<string, any[]>) {
   });
   byMonth.forEach((data, monthKey) => saveArchiveMonth(monthKey, data));
 }
-
-// Migrasi satu kali: kalau file lama daily_archive.json (satu file berisi semua
-// tanggal) masih ada, pecah jadi file per-bulan lalu simpan file lama sebagai
-// backup (di-rename, TIDAK dihapus) supaya data tidak pernah hilang.
 function migrateLegacyDailyArchiveIfNeeded() {
   try {
     if (!fs.existsSync(LEGACY_DAILY_ARCHIVE_FILE)) return;
@@ -1215,22 +1165,6 @@ interface SSEClientInfo {
 
 let sseClients: SSEClientInfo[] = [];
 
-// Setiap klien yang menerima state dengan isExplicitReset/resetConfirmed = true akan
-// LANGSUNG MENGOSONGKAN seluruh antrean di layarnya (itu memang gunanya: tombol
-// "Bersihkan Antrean" harus berlaku serentak di semua perangkat). Karena itu flag ini
-// berbahaya kalau sampai ikut terkirim di siaran yang BUKAN reset.
-//
-// Bahayanya nyata: state yang tersimpan di disk memang menyimpan isExplicitReset=true
-// setelah reset yang sah (saat itu patients memang masih kosong). Kalau instance itu
-// lalu mendapat pasien dari jalur yang TIDAK lewat reconcileQueueStates (mis. hasil
-// sinkronisasi periodik dari Firestore), file-nya bisa berisi kombinasi mustahil
-// "isExplicitReset=true TAPI ada pasien" - dan setiap siaran berikutnya dari instance
-// itu (simpan petugas, simpan kunjungan harian, unggah gambar kotak, dll) akan
-// memerintahkan SEMUA perangkat mengosongkan antreannya, berulang kali.
-//
-// Jadi di sini, di SATU titik yang dilewati semua siaran, flag reset hanya boleh lolos
-// kalau daftar pasiennya memang kosong - persis bentuk reset yang sah. Kombinasi
-// "reset + masih ada pasien" tidak mungkin sah, jadi selalu dinetralkan.
 function sanitizeResetFlagsForBroadcast(data: any): any {
   if (!data || typeof data !== 'object' || !data.state || typeof data.state !== 'object') return data;
   const state = data.state;
@@ -1838,11 +1772,6 @@ function loadStateFromFile() {
           }
           parsed.boxes = parsed.boxes.map(sanitizeServerBox);
           const existingIds = new Set(parsed.boxes.map((b: any) => b.id));
-          // PENTING: jangan pulihkan kotak bawaan/contoh sistem yang MEMANG sudah
-          // sengaja dihapus (lihat deletedBoxIds, ditulis oleh reconcileQueueStates).
-          // Sebelumnya baris ini tidak mengecek itu sama sekali, sehingga kotak
-          // bawaan (mis. salah satu terapis di getInitialServerState) yang dihapus
-          // lewat aplikasi akan MUNCUL LAGI SENDIRI setiap kali state ini dimuat ulang.
           const deletedBoxIdSet = new Set(Array.isArray(parsed.deletedBoxIds) ? parsed.deletedBoxIds : []);
           const missingBoxes = initial.boxes.filter((b: any) => !existingIds.has(b.id) && !deletedBoxIdSet.has(b.id));
           if (missingBoxes.length > 0) {
@@ -1926,20 +1855,7 @@ function saveStateToFile(state: any) {
 // tanpa mengganggu request yang sedang berjalan; disk lokal tetap sumber utama
 // untuk instance yang sama).
 const FIRESTORE_QUOTA_FLAG_FILE = path.join(DATA_DIR, '.firestore_quota_disabled');
-// Jeda "menyerah" saat kuota Firestore habis. Sebelumnya 1 jam penuh - terlalu
-// lama: kalau kuotanya ternyata sudah pulih (reset harian, atau cuma lonjakan
-// sesaat), sistem tetap buta tidak mencadangkan APA PUN ke cloud sampai 1 jam
-// penuh berlalu. Dipersingkat jadi beberapa menit saja - kalau ternyata masih
-// benar-benar habis, percobaan ulang yang gagal itu aman (permintaan yang
-// DITOLAK Firestore karena kuota tidak menghabiskan kuota tambahan yang
-// berarti), jadi tidak ada kerugian mempersingkat jeda ini.
 const FIRESTORE_QUOTA_COOLDOWN_MS = 5 * 60 * 1000; // 5 menit
-// PENTING: kalau server restart PERSIS saat jeda kuota masih aktif (flag file
-// masih baru), tandai di sini supaya kita tahu perlu menjadwalkan ulang timer
-// pemulihan otomatisnya di bawah - sebelumnya IIFE ini hanya mengembalikan
-// true/false tanpa pernah memanggil scheduleFirestoreQuotaRetry(), jadi kalau
-// restart terjadi di tengah jeda, mirroring bisa tetap nonaktif SELAMANYA
-// (tidak ada lagi yang memicu percobaan ulang otomatis).
 let needsQuotaRetryScheduleOnBoot = false;
 let isFirestoreMirrorDisabled = (() => {
   try {
@@ -1955,16 +1871,7 @@ let isFirestoreMirrorDisabled = (() => {
   } catch {}
   return false;
 })();
-let mirrorDebounceTimer: NodeJS.Timeout | null = null;
-let mirrorMaxWaitTimer: NodeJS.Timeout | null = null;
-let pendingMirrorState: any = null;
 
-// Timer untuk menyalakan kembali mirroring secara OTOMATIS setelah jeda di
-// atas berlalu, WALAU server tidak pernah di-restart sama sekali. Sebelumnya,
-// begitu kuota habis, server yang sedang berjalan tidak akan pernah mencoba
-// lagi sendiri - baru dicek ulang kalau prosesnya restart (dan restart-nya
-// sendiri baru terjadi kalau server idle lama). Sekarang server yang sama
-// bisa pulih sendiri begitu jedanya lewat, tanpa perlu menunggu restart.
 let firestoreQuotaRetryTimer: NodeJS.Timeout | null = null;
 
 function scheduleFirestoreQuotaRetry() {
@@ -1977,13 +1884,6 @@ function scheduleFirestoreQuotaRetry() {
     try { fs.unlinkSync(FIRESTORE_QUOTA_FLAG_FILE); } catch {}
     console.log('[FirestoreMirror] Jeda kuota selesai, mencoba mencadangkan ke Cloud Firestore lagi secara otomatis.');
 
-    // PENTING: langsung coba kirim ulang SEMUA data tertunda (antrean, arsip harian,
-    // database pasien, riwayat ranap) yang sempat gagal dicadangkan selama jeda kuota
-    // tadi, jangan cuma menunggu perubahan berikutnya (yang mungkin tidak pernah terjadi
-    // kalau device sudah dimatikan). Tanpa ini, data yang tertunda tetap tidak pernah
-    // sampai ke Firestore sampai ada aksi baru - dan kalau server restart sebelum itu
-    // terjadi, ia akan memulihkan versi LAMA dari Firestore (persis gejala jumlah
-    // kunjungan/pasien hari itu yang tiba-tiba menyusut drastis setelah restart).
     try {
       await flushPendingFirestoreMirrors();
       console.log('[FirestoreMirror] Berhasil mengirim ulang data yang tertunda setelah jeda kuota berakhir.');
@@ -2033,71 +1933,85 @@ function gabungkanSnapshotAntrean(cloud: any, lokal: any): { hasil: any; ditahan
   if (!cloud || typeof cloud !== 'object') return { hasil: lokal, ditahan: [] };
   if (!lokal || typeof lokal !== 'object') return { hasil: lokal, ditahan: [] };
 
-  // Reset yang sah HARUS tetap bisa mengosongkan papan - penahan permanen yang menjaga
-  // agar pasien lamanya tidak hidup lagi, bukan penggabungan ini.
-  if (lokal.isExplicitReset === true && (!Array.isArray(lokal.patients) || lokal.patients.length === 0)) {
-    return { hasil: lokal, ditahan: [] };
-  }
+  // Reset yang sah HARUS tetap bisa mengosongkan papan: kalau sisi lokal memang
+  // membawa penanda reset (isExplicitReset / resetConfirmed) dengan 0 pasien,
+  // jangan masukkan kembali pasien lama dari cloud.
+  const isResetLokal = (lokal.isExplicitReset === true || lokal.resetConfirmed === true)
+    && (!Array.isArray(lokal.patients) || lokal.patients.length === 0);
+  if (isResetLokal) return { hasil: lokal, ditahan: [] };
 
-  const tombstone = new Set<string>([
-    ...(Array.isArray(lokal.deletedPatientIds) ? lokal.deletedPatientIds : []),
-    ...(Array.isArray(lokal.preResetPatientIds) ? lokal.preResetPatientIds : []),
-    ...Array.from(tombstoneResetPermanen),
-  ].filter(Boolean).map(String));
+  const ditolakId = new Set<string>([
+    ...tombstoneResetPermanen,
+    ...(Array.isArray(lokal.deletedPatientIds) ? lokal.deletedPatientIds.map(String) : []),
+    ...(Array.isArray(lokal.preResetPatientIds) ? lokal.preResetPatientIds.map(String) : []),
+  ]);
 
-  const kotakDihapus = new Set<string>(
-    (Array.isArray(lokal.deletedBoxIds) ? lokal.deletedBoxIds : []).filter(Boolean).map(String)
-  );
+  const pasienLokal: any[] = Array.isArray(lokal.patients) ? lokal.patients : [];
+  const pasienCloud: any[] = Array.isArray(cloud.patients) ? cloud.patients : [];
 
   const peta = new Map<string, any>();
-  for (const p of (Array.isArray(cloud.patients) ? cloud.patients : [])) {
-    if (p && p.id && !tombstone.has(String(p.id))) peta.set(String(p.id), p);
-  }
-  for (const p of (Array.isArray(lokal.patients) ? lokal.patients : [])) {
-    if (!p || !p.id) continue;
-    const id = String(p.id);
-    if (tombstone.has(id)) { peta.delete(id); continue; }
-    const sisiAwan = peta.get(id);
-    if (!sisiAwan) { peta.set(id, p); continue; }
-    // Kolom lain: sisi lokal menang (dialah yang baru saja memproses perubahan).
-    // Status ceklis: diputuskan pickCompletionState supaya tidak bisa mundur tanpa bukti.
-    const { completed, completionUpdatedAt } = pickCompletionState(sisiAwan, p);
-    peta.set(id, {
-      ...sisiAwan,
-      ...p,
-      completed,
-      completionUpdatedAt,
-      completedAt: completed ? (p.completedAt || sisiAwan.completedAt) : undefined,
-    });
-  }
+  pasienLokal.forEach((p) => { if (p && p.id) peta.set(p.id, { ...p }); });
 
-  const petaKotak = new Map<string, any>();
-  for (const b of (Array.isArray(cloud.boxes) ? cloud.boxes : [])) {
-    if (b && b.id && !kotakDihapus.has(String(b.id))) petaKotak.set(String(b.id), b);
-  }
-  for (const b of (Array.isArray(lokal.boxes) ? lokal.boxes : [])) {
-    if (!b || !b.id) continue;
-    const id = String(b.id);
-    if (kotakDihapus.has(id)) { petaKotak.delete(id); continue; }
-    petaKotak.set(id, { ...petaKotak.get(id), ...b });
-  }
+  const ditahan: string[] = [];
+  pasienCloud.forEach((cp) => {
+    if (!cp || !cp.id || ditolakId.has(String(cp.id))) return;
+    const lp = peta.get(cp.id);
+    if (!lp) {
+      // Pasien masih ada di cadangan awan dan BELUM pernah dihapus/dibersihkan secara sah -> tahan
+      peta.set(cp.id, { ...cp });
+      ditahan.push(cp.id);
+    } else {
+      // Ada di kedua sisi: satukan status ceklis tanpa memundurkannya.
+      //
+      // URUTAN ARGUMENNYA PENTING. pickCompletionState(existing, incoming) memperlakukan
+      // sisi KEDUA sebagai klaim yang lebih baru. Sisi yang lebih baru di sini adalah
+      // sisi LOKAL - dialah yang baru saja memproses tindakan petugas - sedangkan
+      // cadangan awan justru yang lebih tua. Kalau urutannya terbalik, cadangan lama
+      // dianggap klaim baru, dan pembatalan ceklis yang SAH dari petugas langsung
+      // dikembalikan jadi "selesai" lagi - ceklis terlihat berkedip sendiri.
+      const { completed, completionUpdatedAt } = pickCompletionState(cp, lp);
+      peta.set(cp.id, {
+        ...cp,
+        ...lp,
+        completed,
+        completionUpdatedAt,
+        calledCount: Math.max(Number(lp.calledCount || 0), Number(cp.calledCount || 0)),
+        lastCalledAt: (lp.lastCalledAt && (!cp.lastCalledAt || new Date(lp.lastCalledAt) >= new Date(cp.lastCalledAt)))
+          ? lp.lastCalledAt
+          : (cp.lastCalledAt || lp.lastCalledAt),
+      });
+    }
+  });
 
-  const hasil = {
-    ...lokal,
-    patients: Array.from(peta.values()),
-    boxes: Array.from(petaKotak.values()),
+  const kotakLokal: any[] = Array.isArray(lokal.boxes) ? lokal.boxes : [];
+  const kotakCloud: any[] = Array.isArray(cloud.boxes) ? cloud.boxes : [];
+  const hapusKotak = new Set<string>(Array.isArray(lokal.deletedBoxIds) ? lokal.deletedBoxIds.map(String) : []);
+  const idKotakLokal = new Set<string>(kotakLokal.map((b) => b && b.id).filter(Boolean));
+  const kotakGabung = [...kotakLokal];
+  kotakCloud.forEach((cb) => {
+    if (cb && cb.id && !idKotakLokal.has(cb.id) && !hapusKotak.has(String(cb.id))) {
+      kotakGabung.push(cb);
+    }
+  });
+
+  return {
+    hasil: {
+      ...cloud,
+      ...lokal,
+      patients: Array.from(peta.values()),
+      boxes: kotakGabung,
+    },
+    ditahan,
   };
-
-  // Penjaga terakhir: kalau hasil gabungan JUSTRU kehilangan pasien yang ada di awan dan
-  // tidak pernah dihapus, batalkan penulisannya. Dengan penggabungan di atas ini
-  // seharusnya mustahil - justru itu gunanya, supaya kekeliruan di kemudian hari
-  // tertahan di sini, bukan baru diketahui setelah data hilang.
-  const ditahan = (Array.isArray(cloud.patients) ? cloud.patients : [])
-    .filter((p: any) => p && p.id && !tombstone.has(String(p.id)) && !peta.has(String(p.id)))
-    .map((p: any) => String(p.id));
-
-  return { hasil, ditahan };
 }
+
+// ---------------------------------------------------------------------------
+// Firestore Mirror Channels with Debounce + MaxWait Guarantees
+// ---------------------------------------------------------------------------
+// 1. Queue State (Antrean Utama)
+let mirrorDebounceTimer: NodeJS.Timeout | null = null;
+let mirrorMaxWaitTimer: NodeJS.Timeout | null = null;
+let pendingMirrorState: any = null;
 
 async function flushQueueStateMirrorNow(): Promise<void> {
   if (mirrorDebounceTimer) {
@@ -2113,38 +2027,45 @@ async function flushQueueStateMirrorNow(): Promise<void> {
   const currentState = pendingMirrorState;
   if (!currentState) return;
 
-  // Menunda pencadangan tanpa membuang datanya - sama seperti pola arsip harian.
-  // Lebih baik telat mencadangkan daripada menimpa cadangan yang masih baik.
-  const tundaPapanDanCobaLagi = (alasan: string) => {
-    pendingMirrorState = currentState;
-    console.warn(`[FirestoreMirror] ${alasan} - pencadangan papan antrean DITUNDA, data lokal tidak dibuang dan akan dicoba lagi.`);
-    if (!mirrorDebounceTimer) {
-      mirrorDebounceTimer = setTimeout(() => { void flushQueueStateMirrorNow(); }, 30000);
-    }
-  };
-
   try {
-    // Baca dulu apa yang SUDAH ada di cadangan, lalu gabungkan. Penulisan tidak boleh
-    // lagi menimpa buta (lihat gabungkanSnapshotAntrean).
+    const sanitized = JSON.parse(JSON.stringify(currentState));
+
+    // Baca dulu apa yang SUDAH ada di cadangan awan, lalu gabungkan.
     let cloudState: any = null;
     try {
       const snapshot = await getDoc(QUEUE_STATE_DOC_REF);
-      cloudState = snapshot.exists() ? snapshot.data() : null;
+      if (snapshot.exists()) {
+        cloudState = snapshot.data();
+      }
     } catch (readErr: any) {
-      if (handleFirestoreQuotaError(readErr, 'FirestoreMirror-Read')) return;
-      tundaPapanDanCobaLagi('Tidak bisa membaca cadangan papan yang sekarang');
+      if (handleFirestoreQuotaError(readErr, 'QueueStateMirror-Read')) return;
+      console.warn('[QueueStateMirror] Tidak bisa membaca cadangan papan antrean, penulisan dilewati agar tidak menimpa data yang ada.');
       return;
     }
 
-    const { hasil, ditahan } = gabungkanSnapshotAntrean(cloudState, currentState);
+    const { hasil: merged, ditahan } = gabungkanSnapshotAntrean(cloudState, sanitized);
+
     if (ditahan.length > 0) {
-      tundaPapanDanCobaLagi(`Penulisan dibatalkan karena akan menghilangkan ${ditahan.length} pasien yang masih ada di cadangan`);
-      return;
+      console.log(`[QueueStateMirror] Menahan ${ditahan.length} pasien dari cadangan awan yang belum ada di disk lokal instance ini: ${ditahan.join(', ')}`);
+      // Lengkapi juga disk lokal instance ini supaya tidak terus berbeda
+      try {
+        const diskState = loadStateFromFile();
+        if (diskState && Array.isArray(diskState.patients)) {
+          const diskIds = new Set(diskState.patients.map((p: any) => p && p.id).filter(Boolean));
+          const tambahan = (merged.patients || []).filter((p: any) => p && p.id && !diskIds.has(p.id));
+          if (tambahan.length > 0) {
+            diskState.patients = [...diskState.patients, ...tambahan];
+            safeAtomicWriteJson(DB_FILE, diskState);
+            broadcastUpdate({ type: 'SYNC_STATE', state: diskState });
+          }
+        }
+      } catch (localErr) {
+        console.warn('[QueueStateMirror] Gagal melengkapi disk lokal dengan pasien yang ditahan:', localErr);
+      }
     }
 
-    const sanitized = JSON.parse(JSON.stringify(hasil));
     await setDoc(QUEUE_STATE_DOC_REF, {
-      ...sanitized,
+      ...merged,
       lastMirroredAt: new Date().toISOString(),
     });
   } catch (err: any) {
@@ -2153,17 +2074,6 @@ async function flushQueueStateMirrorNow(): Promise<void> {
 }
 
 async function mirrorStateToFirestore(state: any): Promise<void> {
-  // PENTING: selalu catat state TERBARU yang ingin dicadangkan, walau kuota
-  // sedang dalam masa jeda. Sebelumnya fungsi ini keluar duluan tanpa
-  // menyentuh pendingMirrorState sama sekali saat kuota habis - artinya
-  // perubahan (termasuk reset antrean) yang terjadi PERSIS selama jeda kuota
-  // hilang sepenuhnya dari Firestore, tidak pernah dicoba lagi walau jedanya
-  // sudah selesai, sampai ada perubahan BARU lain yang memicu mirror lagi.
-  // Kalau device dimatikan tepat setelah itu (server lalu restart & disk
-  // lokalnya kosong), server akan pulih dari Firestore yang masih versi LAMA
-  // (sebelum reset) - persis gejala "pasien yang sudah dibersihkan muncul
-  // lagi besok". Dengan selalu mengisi pendingMirrorState di sini, begitu
-  // jeda kuota berakhir kita bisa langsung coba kirim ulang state ini.
   pendingMirrorState = state;
 
   // If Firestore mirror is disabled due to quota exhaustion, exit immediately
@@ -2171,33 +2081,27 @@ async function mirrorStateToFirestore(state: any): Promise<void> {
     return;
   }
 
-  // Debounce writes by 5s to batch rapid changes and minimize write units.
+  // Jaring pengaman MaxWait: hanya dijadwalkan saat belum ada timer maxWait yang berjalan.
+  // Tidak di-reset oleh perubahan susulan, menjamin penulisan terjadi maksimal 5s sejak perubahan pertama.
+  if (!mirrorMaxWaitTimer) {
+    mirrorMaxWaitTimer = setTimeout(() => {
+      flushQueueStateMirrorNow().catch((err) => console.warn('[FirestoreMirror] MaxWait flush error:', err));
+    }, 5000);
+  }
+
   if (mirrorDebounceTimer) {
     clearTimeout(mirrorDebounceTimer);
   }
-  mirrorDebounceTimer = setTimeout(() => { void flushQueueStateMirrorNow(); }, 5000);
 
-  // PENTING: debounce di atas RESET ulang setiap kali ada perubahan baru - di klinik
-  // yang sibuk (pasien datang/dipanggil/diceklis tiap beberapa detik terus-menerus),
-  // timer itu bisa TIDAK PERNAH benar-benar menyala selama aktivitas tidak berhenti,
-  // sehingga cadangan Firestore-nya jadi jauh lebih basi dari 5 detik (bisa
-  // berpuluh menit). Kalau instance server sempat di-restart/di-recycle oleh
-  // platform hosting PERSIS di jendela itu, semua aktivitas sejak cadangan
-  // terakhir hilang saat dipulihkan dari Firestore - persis gejala "sebagian nama
-  // pasien hilang, tersebar di beberapa kotak" yang dilaporkan. Timer kedua ini
-  // menjamin ada penulisan paling lambat 5 detik sejak perubahan PERTAMA yang
-  // belum tercadangkan, walau perubahan baru terus mengalir tanpa jeda.
-  if (!mirrorMaxWaitTimer) {
-    mirrorMaxWaitTimer = setTimeout(() => { void flushQueueStateMirrorNow(); }, 5000);
-  }
+  // Debounce writes by 5s to batch rapid changes and minimize write units
+  mirrorDebounceTimer = setTimeout(() => {
+    flushQueueStateMirrorNow().catch((err) => console.warn('[FirestoreMirror] Debounce flush error:', err));
+  }, 5000);
 }
 
-// Mirror & Hydrate for Daily Archive (Laporan Harian & Bulanan per Terapis)
-// SATU DOKUMEN FIRESTORE PER BULAN (koleksi daily_archive_months, id = "YYYY-MM"),
-// bukan satu dokumen raksasa berisi semua tanggal - dokumen Firestore punya batas
-// keras 1MiB per dokumen, jadi format lama akan berhenti berfungsi total begitu
-// riwayat cukup panjang. Per-bulan juga jauh lebih hemat kuota tulis karena hanya
-// bulan yang berubah yang perlu di-upload ulang.
+// ---------------------------------------------------------------------------
+// 2. Mirror & Hydrate for Daily Archive (Laporan Harian & Bulanan per Terapis)
+// ---------------------------------------------------------------------------
 const DAILY_ARCHIVE_MONTHS_COLLECTION = 'daily_archive_months';
 function dailyArchiveMonthDocRef(monthKey: string) {
   return doc(serverFirestoreDb, DAILY_ARCHIVE_MONTHS_COLLECTION, monthKey);
@@ -2280,7 +2184,6 @@ async function mirrorSatuTanggal(dateKey: string, visits: any[]): Promise<boolea
     return false;
   }
 }
-
 const dailyArchiveMirrorDebounceTimers = new Map<string, NodeJS.Timeout>();
 const dailyArchiveMirrorMaxWaitTimers = new Map<string, NodeJS.Timeout>();
 const pendingDailyArchiveMirrors = new Map<string, Record<string, any[]>>();
@@ -2414,27 +2317,31 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
   }
 }
 
-async function mirrorArchiveMonthToFirestore(monthKey: string, data: Record<string, any[]>): Promise<void> {
+async function mirrorArchiveMonthToFirestore(monthKey: string, data: Record<string, any[]>) {
   // PENTING: catat dulu data TERBARU yang ingin dicadangkan, SEBELUM memeriksa apakah
   // mirroring sedang dijeda karena kuota habis. Urutan yang salah (cek dulu, baru catat)
-  // membuat penulisan arsip yang terjadi PERSIS selama jeda kuota habis hilang sepenuhnya -
+  // membuat penulisan arsip yang terjadi PERSIS selama jeda kuota hilang sepenuhnya -
   // tidak pernah dicoba lagi walau jedanya sudah selesai - persis gejala jumlah kunjungan
   // hari itu yang tiba-tiba menyusut drastis setelah server sempat restart.
   pendingDailyArchiveMirrors.set(monthKey, data);
   if (isFirestoreMirrorDisabled) return;
+
+  if (!dailyArchiveMirrorMaxWaitTimers.has(monthKey)) {
+    const maxTimer = setTimeout(() => {
+      flushArchiveMonthMirrorNow(monthKey).catch((err) => console.warn(`[DailyArchiveMirror] MaxWait flush error (${monthKey}):`, err));
+    }, 5000);
+    dailyArchiveMirrorMaxWaitTimers.set(monthKey, maxTimer);
+  }
+
   const existingTimer = dailyArchiveMirrorDebounceTimers.get(monthKey);
   if (existingTimer) clearTimeout(existingTimer);
-  dailyArchiveMirrorDebounceTimers.set(monthKey, setTimeout(() => { void flushArchiveMonthMirrorNow(monthKey); }, 5000));
-
-  // Jamin penulisan paling lambat 5 detik sejak perubahan pertama yang belum
-  // tercadangkan untuk bulan ini, walau perubahan baru terus mengalir tanpa jeda
-  // (lihat komentar di mirrorStateToFirestore untuk alasan lengkapnya).
-  if (!dailyArchiveMirrorMaxWaitTimers.has(monthKey)) {
-    dailyArchiveMirrorMaxWaitTimers.set(monthKey, setTimeout(() => { void flushArchiveMonthMirrorNow(monthKey); }, 5000));
-  }
+  const timer = setTimeout(() => {
+    flushArchiveMonthMirrorNow(monthKey).catch((err) => console.warn(`[DailyArchiveMirror] Debounce flush error (${monthKey}):`, err));
+  }, 5000);
+  dailyArchiveMirrorDebounceTimers.set(monthKey, timer);
 }
 
-async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
+async function hydrateDailyArchiveFromFirestoreIfNeeded() {
   try {
     // Dulu di sini ada pintasan: "kalau disk lokal sudah punya isi, jangan tarik dari
     // cloud". Pintasan itu berbahaya. Instance yang datanya cuma sebagian - misalnya
@@ -2490,9 +2397,6 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
     } catch (err) {
       console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive_days:', err);
     }
-
-    // 2. Fallback ke dokumen tunggal lama (kalau instance ini belum pernah jalan
-    // dengan format baru, tapi cloud masih punya backup dari format lama)
     if (totalDates === 0) {
       try {
         const legacySnapshot = await getDoc(DAILY_ARCHIVE_DOC_REF);
@@ -2510,7 +2414,6 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
         console.warn('[FirestoreHydrate] Gagal memulihkan daily_archive (format lama):', err);
       }
     }
-
     if (totalDates > 0) {
       console.log(`[FirestoreHydrate] Memulihkan ${totalDates} tanggal arsip dari Firestore.`);
     }
@@ -2519,7 +2422,9 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded(): Promise<void> {
   }
 }
 
-// Mirror & Hydrate for Master Patients (Database Pasien)
+// ---------------------------------------------------------------------------
+// 3. Mirror & Hydrate for Master Patients (Database Pasien)
+// ---------------------------------------------------------------------------
 let masterPatientsMirrorDebounceTimer: NodeJS.Timeout | null = null;
 let masterPatientsMirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingMasterPatientsMirror: any[] | null = null;
@@ -2534,8 +2439,10 @@ async function flushMasterPatientsMirrorNow(): Promise<void> {
     masterPatientsMirrorMaxWaitTimer = null;
   }
   if (isFirestoreMirrorDisabled) return;
+
   const current = pendingMasterPatientsMirror;
   if (!current) return;
+
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
     await setDoc(MASTER_PATIENTS_DOC_REF, { patients: sanitized, lastMirroredAt: new Date().toISOString() });
@@ -2549,14 +2456,17 @@ async function mirrorMasterPatientsToFirestore(patients: any[]): Promise<void> {
   // mirrorArchiveMonthToFirestore untuk alasannya.
   pendingMasterPatientsMirror = patients;
   if (isFirestoreMirrorDisabled) return;
-  if (masterPatientsMirrorDebounceTimer) clearTimeout(masterPatientsMirrorDebounceTimer);
-  masterPatientsMirrorDebounceTimer = setTimeout(() => { void flushMasterPatientsMirrorNow(); }, 5000);
 
-  // Jamin penulisan paling lambat 5 detik sejak perubahan pertama yang belum
-  // tercadangkan (lihat komentar di mirrorStateToFirestore untuk alasan lengkapnya).
   if (!masterPatientsMirrorMaxWaitTimer) {
-    masterPatientsMirrorMaxWaitTimer = setTimeout(() => { void flushMasterPatientsMirrorNow(); }, 5000);
+    masterPatientsMirrorMaxWaitTimer = setTimeout(() => {
+      flushMasterPatientsMirrorNow().catch((err) => console.warn('[MasterPatientsMirror] MaxWait flush error:', err));
+    }, 5000);
   }
+
+  if (masterPatientsMirrorDebounceTimer) clearTimeout(masterPatientsMirrorDebounceTimer);
+  masterPatientsMirrorDebounceTimer = setTimeout(() => {
+    flushMasterPatientsMirrorNow().catch((err) => console.warn('[MasterPatientsMirror] Debounce flush error:', err));
+  }, 5000);
 }
 
 async function hydrateMasterPatientsFromFirestoreIfNeeded(): Promise<void> {
@@ -2579,7 +2489,9 @@ async function hydrateMasterPatientsFromFirestoreIfNeeded(): Promise<void> {
   }
 }
 
-// Mirror & Hydrate for Ranap History (Riwayat Antrean Rawat Inap)
+// ---------------------------------------------------------------------------
+// 4. Mirror & Hydrate for Ranap History (Riwayat Antrean Rawat Inap)
+// ---------------------------------------------------------------------------
 let ranapHistoryMirrorDebounceTimer: NodeJS.Timeout | null = null;
 let ranapHistoryMirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingRanapHistoryMirror: any[] | null = null;
@@ -2594,8 +2506,10 @@ async function flushRanapHistoryMirrorNow(): Promise<void> {
     ranapHistoryMirrorMaxWaitTimer = null;
   }
   if (isFirestoreMirrorDisabled) return;
+
   const current = pendingRanapHistoryMirror;
   if (!current) return;
+
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
     await setDoc(RANAP_HISTORY_DOC_REF, { history: sanitized, lastMirroredAt: new Date().toISOString() });
@@ -2609,14 +2523,17 @@ async function mirrorRanapHistoryToFirestore(history: any[]): Promise<void> {
   // mirrorArchiveMonthToFirestore untuk alasannya.
   pendingRanapHistoryMirror = history;
   if (isFirestoreMirrorDisabled) return;
-  if (ranapHistoryMirrorDebounceTimer) clearTimeout(ranapHistoryMirrorDebounceTimer);
-  ranapHistoryMirrorDebounceTimer = setTimeout(() => { void flushRanapHistoryMirrorNow(); }, 5000);
 
-  // Jamin penulisan paling lambat 5 detik sejak perubahan pertama yang belum
-  // tercadangkan (lihat komentar di mirrorStateToFirestore untuk alasan lengkapnya).
   if (!ranapHistoryMirrorMaxWaitTimer) {
-    ranapHistoryMirrorMaxWaitTimer = setTimeout(() => { void flushRanapHistoryMirrorNow(); }, 5000);
+    ranapHistoryMirrorMaxWaitTimer = setTimeout(() => {
+      flushRanapHistoryMirrorNow().catch((err) => console.warn('[RanapHistoryMirror] MaxWait flush error:', err));
+    }, 5000);
   }
+
+  if (ranapHistoryMirrorDebounceTimer) clearTimeout(ranapHistoryMirrorDebounceTimer);
+  ranapHistoryMirrorDebounceTimer = setTimeout(() => {
+    flushRanapHistoryMirrorNow().catch((err) => console.warn('[RanapHistoryMirror] Debounce flush error:', err));
+  }, 5000);
 }
 
 async function hydrateRanapHistoryFromFirestoreIfNeeded(): Promise<void> {
@@ -2683,53 +2600,49 @@ async function hydrateStateFromFirestoreIfNeeded(): Promise<void> {
   }
 }
 
-// PENTING: platform hosting bisa menjalankan LEBIH DARI SATU instance server ini
-// sekaligus saat trafik ramai (mis. banyak tablet mengakses bersamaan). Instance yang
-// SUDAH menyala lama tidak pernah otomatis tahu ada perubahan yang terjadi di instance
-// LAIN - hidrasi dari Firestore di atas cuma jalan SEKALI saat instance itu baru
-// menyala, bukan berulang. Akibatnya, kalau sebuah perangkat kebetulan "nyangkut" ke
-// instance yang sudah basi, me-refresh berkali-kali TETAP tidak membantu (refresh cuma
-// mengambil ulang dari INSTANCE YANG SAMA itu, bukan instance lain yang datanya lebih
-// baru) - persis gejala "sebagian browser sudah bersih, satu browser lain masih ada
-// sisa antrean lama walau sudah di-refresh berkali-kali".
-//
-// Perbaikannya: setiap instance yang SEDANG BERJALAN rutin menyamakan diri dengan
-// cadangan Firestore. PENTING: TIDAK memakai reconcileQueueStates di sini - fungsi itu
-// dirancang untuk kasus "data yang BARU MASUK dari klien pasti sama baru atau lebih baru
-// dari yang sudah tersimpan", jadi utk field² seperti boxId/note/actionCode ia MENANG-
-// KAN begitu saja nilai dari sisi "incoming". Itu benar utk klien yang POST perubahan
-// miliknya sendiri, tapi salah total dipakai di arah SEBALIKNYA di sini: cadangan
-// Firestore & mirror-nya masih boleh punya jeda beberapa detik dari perubahan lokal yang
-// PALING BARU, jadi kalau dipakai sbg "incoming" ke reconcileQueueStates, cadangan yang
-// SEDIKIT BASI itu bisa balas menimpa data lokal yang justru lebih baru (mis. pasien
-// yang BARU SAJA dipindah kotaknya keliatan "geser-geser sendiri" balik ke kotak lama
-// tiap giliran sinkron, sampai cadangan Firestore-nya sempat menyusul).
-//
-// Jadi sinkron periodik ini sengaja dibuat SEARAH & konservatif: HANYA menambahkan
-// pasien/kotak yang di lokal BENAR-BENAR TIDAK ADA sama sekali (menutup celah instance
-// yang ketinggalan info), dan TIDAK PERNAH mengubah/menimpa field apa pun dari pasien
-// atau kotak yang sudah ada di lokal - lokal selalu dianggap lebih tahu tentang datanya
-// sendiri. Reset tetap tidak mungkin terpicu dari sini (lihat filter isExplicitReset).
 const PERIODIC_FIRESTORE_SYNC_INTERVAL_MS = 15 * 1000;
 
-function supplementStateFromCloud(localState: any, cloudState: any): { merged: any; changed: boolean } {
+function supplementStateFromCloud(localState: any, cloudState: any) {
   let changed = false;
 
-  const deletedPatientIds = new Set<string>(Array.isArray(localState.deletedPatientIds) ? localState.deletedPatientIds : []);
-  const preResetPatientIds = new Set<string>(Array.isArray(localState.preResetPatientIds) ? localState.preResetPatientIds : []);
-  const deletedBoxIds = new Set<string>(Array.isArray(localState.deletedBoxIds) ? localState.deletedBoxIds : []);
+  const deletedPatientIds = new Set(Array.isArray(localState.deletedPatientIds) ? localState.deletedPatientIds : []);
+  const preResetPatientIds = new Set([
+    ...tombstoneResetPermanen,
+    ...(Array.isArray(localState.preResetPatientIds) ? localState.preResetPatientIds : [])
+  ]);
+  const deletedBoxIds = new Set(Array.isArray(localState.deletedBoxIds) ? localState.deletedBoxIds : []);
 
-  const localPatients: any[] = Array.isArray(localState.patients) ? localState.patients : [];
-  const localPatientIds = new Set(localPatients.map((p) => p && p.id).filter(Boolean));
-  const cloudPatients: any[] = Array.isArray(cloudState.patients) ? cloudState.patients : [];
-  const missingPatients = cloudPatients.filter((p) =>
-    p && p.id && !localPatientIds.has(p.id) && !deletedPatientIds.has(p.id) && !preResetPatientIds.has(p.id)
-  );
-  if (missingPatients.length > 0) changed = true;
+  const localPatients = Array.isArray(localState.patients) ? localState.patients : [];
+  const localPatientMap = new Map<string, any>();
+  localPatients.forEach((p) => { if (p && p.id) localPatientMap.set(p.id, { ...p }); });
 
-  const localBoxes: any[] = Array.isArray(localState.boxes) ? localState.boxes : [];
+  const cloudPatients = Array.isArray(cloudState.patients) ? cloudState.patients : [];
+  const missingPatients: any[] = [];
+
+  for (const cp of cloudPatients) {
+    if (!cp || !cp.id || deletedPatientIds.has(cp.id) || preResetPatientIds.has(cp.id)) continue;
+    const lp = localPatientMap.get(cp.id);
+    if (!lp) {
+      missingPatients.push(cp);
+      localPatientMap.set(cp.id, cp);
+      changed = true;
+    } else {
+      // Pasien ada di kedua sisi: harmonisasikan status ceklis tanpa memundurkannya
+      const { completed, completionUpdatedAt } = pickCompletionState(lp, cp);
+      if (lp.completed !== completed) {
+        lp.completed = completed;
+        lp.completionUpdatedAt = completionUpdatedAt;
+        if (completed && !lp.completedAt) {
+          lp.completedAt = cp.completedAt || new Date().toISOString();
+        }
+        changed = true;
+      }
+    }
+  }
+
+  const localBoxes = Array.isArray(localState.boxes) ? localState.boxes : [];
   const localBoxIds = new Set(localBoxes.map((b) => b && b.id).filter(Boolean));
-  const cloudBoxes: any[] = Array.isArray(cloudState.boxes) ? cloudState.boxes : [];
+  const cloudBoxes = Array.isArray(cloudState.boxes) ? cloudState.boxes : [];
   const missingBoxes = cloudBoxes.filter((b) => b && b.id && !localBoxIds.has(b.id) && !deletedBoxIds.has(b.id));
   if (missingBoxes.length > 0) changed = true;
 
@@ -2737,20 +2650,13 @@ function supplementStateFromCloud(localState: any, cloudState: any): { merged: a
     return { merged: localState, changed: false };
   }
 
-  const mergedPatients = [...localPatients, ...missingPatients];
+  const mergedPatients = Array.from(localPatientMap.values());
 
   return {
     merged: {
       ...localState,
       patients: mergedPatients,
       boxes: [...localBoxes, ...missingBoxes],
-      // Instance yang baru saja direset menyimpan isExplicitReset=true di filenya
-      // (saat itu memang belum ada pasien). Begitu di sini kita menambahkan pasien
-      // yang ditemukan dari instance lain, flag itu TIDAK BOLEH ikut terbawa: kalau
-      // terbawa, file jadi berisi "reset=true padahal ada pasien", lalu setiap siaran
-      // dari instance ini akan menyuruh semua perangkat mengosongkan antreannya.
-      // Aturannya sama persis dengan yang dipakai reconcileQueueStates: flag reset
-      // hanya boleh tetap menyala selama daftar pasien memang masih kosong.
       isExplicitReset: Boolean(localState.isExplicitReset) && mergedPatients.length === 0,
       resetConfirmed: Boolean(localState.resetConfirmed) && mergedPatients.length === 0,
     },
@@ -2891,66 +2797,49 @@ function logNewDeletionsForAudit(existingState: any, incomingPayload: any) {
   }
 }
 
-// Smart State Reconciliation Helper (prevents lost updates when 30+ devices sync simultaneously)
-// Menentukan status ceklis mana yang menang saat dua versi pasien digabungkan.
-// KEMBARAN PERSIS dari pickCompletionState di src/App.tsx - keduanya HARUS memakai
-// aturan yang sama, kalau tidak server dan tablet bisa mengambil kesimpulan berbeda
-// atas kejadian yang sama.
-//
-// Dulu aturannya "sekali selesai, tetap selesai" (operator ATAU). Itu menjaga hal yang
-// nyata: tablet yang lama tertidur lalu bangun membawa data usang tidak boleh
-// menghidupkan kembali pasien yang sudah diceklis petugas lain. Tapi akibatnya
-// PEMBATALAN ceklis tidak pernah bisa menular - status hanya bisa naik, tidak turun.
-//
-// Sekarang pemenangnya ditentukan oleh JAM perubahan (completionUpdatedAt). Data lama
-// yang belum berstempel tetap memakai aturan lama, jadi tidak ada perilaku yang
-// berubah mendadak saat pembaruan ini baru dipasang.
 function pickCompletionState(
   existing: any,
   incoming: any
 ): { completed: boolean; completionUpdatedAt?: string } {
+  const exCompleted = Boolean(existing && existing.completed);
+  const inCompleted = Boolean(incoming && incoming.completed);
+
+  // Arah 1: Kalau SALAH SATU menandai selesai, selesai SELALU menang kecuali ada
+  // pembatalan yang sah. Menandai selesai tidak diperketat supaya tombol ceklis
+  // tetap responsif dan tidak tertolak oleh perbedaan waktu antarperangkat.
+  if (exCompleted !== inCompleted) {
+    const mauBatal = !inCompleted; // existing selesai, incoming meminta batal
+    if (mauBatal) {
+      // Pembatalan (selesai -> belum) HANYA menang kalau KEDUA sisi berstempel waktu
+      // dan stempel pembatalan benar-benar lebih baru daripada stempel penyelesaian.
+      // Catatan tanpa stempel adalah catatan paling tua, jadi tidak boleh membatalkan
+      // status selesai yang sudah ada.
+      const exMs = existing && existing.completionUpdatedAt ? new Date(existing.completionUpdatedAt).getTime() : NaN;
+      const inMs = incoming && incoming.completionUpdatedAt ? new Date(incoming.completionUpdatedAt).getTime() : NaN;
+      if (!isNaN(exMs) && !isNaN(inMs) && inMs > exMs) {
+        return { completed: false, completionUpdatedAt: incoming.completionUpdatedAt };
+      }
+      return { completed: true, completionUpdatedAt: existing?.completionUpdatedAt };
+    } else {
+      // incoming menandai selesai
+      return {
+        completed: true,
+        completionUpdatedAt: incoming?.completionUpdatedAt || existing?.completionUpdatedAt || new Date().toISOString(),
+      };
+    }
+  }
+
+  // Kedua sisi sama (sama-sama selesai atau sama-sama belum): pilih stempel terbaru
   const exMs = existing && existing.completionUpdatedAt ? new Date(existing.completionUpdatedAt).getTime() : NaN;
   const inMs = incoming && incoming.completionUpdatedAt ? new Date(incoming.completionUpdatedAt).getTime() : NaN;
-  const exValid = !isNaN(exMs);
-  const inValid = !isNaN(inMs);
+  const updatedAt = (!isNaN(inMs) && (isNaN(exMs) || inMs >= exMs))
+    ? incoming.completionUpdatedAt
+    : (existing?.completionUpdatedAt || incoming?.completionUpdatedAt);
 
-  // MUNDURNYA STATUS CEKLIS (sudah selesai -> kembali belum) hanya boleh menang kalau
-  // BISA DIBUKTIKAN lebih baru: kedua sisi berstempel, dan stempel yang masuk benar-benar
-  // lebih baru. Kalau tidak bisa dibuktikan, ceklis dipertahankan.
-  //
-  // KENAPA: dulu sisi yang masuk menang begitu saja asal IA berstempel, walau sisi yang
-  // sudah selesai tidak berstempel sama sekali. Padahal catatan yang tidak berstempel itu
-  // justru yang paling tua - mis. pasien lama, atau salinan papan antrean yang dipulihkan
-  // dari cadangan. Akibatnya pasien yang sudah diceklis bisa kembali "belum selesai"
-  // dengan sendirinya, dan kemundurannya ikut tertulis ke register harian lewat
-  // sinkronisasi. Persis itu yang terjadi pada 22 September 2026 dini hari: empat pasien
-  // yang sudah selesai kembali berstatus menunggu tanpa ada yang menyentuhnya.
-  //
-  // Arah sebaliknya (belum selesai -> selesai) sengaja TIDAK diperketat: menambahkan
-  // ceklis tidak menghilangkan pekerjaan siapa pun, sedangkan membatalkannya iya.
-  const exDone = Boolean(existing && existing.completed);
-  const inDone = Boolean(incoming && incoming.completed);
-  if (exDone && !inDone) {
-    const bolehMundur = exValid && inValid && inMs > exMs;
-    return bolehMundur
-      ? { completed: false, completionUpdatedAt: incoming.completionUpdatedAt }
-      : { completed: true, completionUpdatedAt: existing.completionUpdatedAt };
-  }
-
-  if (exValid && inValid) {
-    return inMs >= exMs
-      ? { completed: inDone, completionUpdatedAt: incoming.completionUpdatedAt }
-      : { completed: exDone, completionUpdatedAt: existing.completionUpdatedAt };
-  }
-  if (inValid) {
-    return { completed: inDone, completionUpdatedAt: incoming.completionUpdatedAt };
-  }
-  if (exValid) {
-    return { completed: exDone, completionUpdatedAt: existing.completionUpdatedAt };
-  }
-  return { completed: exDone || inDone, completionUpdatedAt: undefined };
+  return { completed: inCompleted, completionUpdatedAt: updatedAt };
 }
 
+// Smart State Reconciliation Helper (prevents lost updates when 30+ devices sync simultaneously)
 function reconcileQueueStates(existingState: any, incomingPayload: any) {
   if (!existingState) existingState = getInitialServerState();
 
@@ -2961,10 +2850,6 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
 
   if (isExplicitReset) {
     const resetTime = incomingPayload.lastResetAt || new Date().toISOString();
-    // Ingat id-id pasien yang baru saja dihapus reset ini, digabung dengan daftar
-    // dari reset-reset sebelumnya. Ini dipakai untuk menolak pasien "hantu" yang
-    // dikirim ulang oleh device yang belum sempat sinkron reset (mis. layar sempat
-    // off semalaman), TANPA bergantung pada jam device pengirim yang bisa salah/mundur.
     const preResetPatientIds = Array.from(new Set([
       ...(Array.isArray(existingState.preResetPatientIds) ? existingState.preResetPatientIds : []),
       ...(Array.isArray(existingState.patients) ? existingState.patients.map((p: any) => p && p.id).filter(Boolean) : []),
@@ -3011,10 +2896,6 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   const cumulativeDeletedList = Array.from(new Set([...existingDeleted, ...incomingDeleted])).slice(-1000);
   const deletedPatientIds = new Set(cumulativeDeletedList);
 
-  // Id pasien yang sudah dihapus oleh reset (bukan berdasarkan jam, tapi id spesifik),
-  // supaya device yang belum sinkron reset tidak bisa menghidupkan lagi pasien lama —
-  // dan supaya pasien BARU (id baru, dibuat setelah reset) tidak pernah ikut tersaring
-  // hanya karena jam device yang menginputnya salah/mundur.
   const preResetPatientIds = new Set<string>(
     Array.isArray(existingState.preResetPatientIds) ? existingState.preResetPatientIds : []
   );
@@ -3068,8 +2949,6 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
         ? inP.lastCalledAt
         : existing.lastCalledAt;
 
-      // Transisi baru menjadi selesai -> pakai jam SERVER, bukan jam device pengirim,
-      // supaya respon time (Input -> Ceklis) tidak pernah negatif akibat jam tablet yang salah/mundur.
       // Kalau hasil akhirnya TIDAK selesai (ceklis dibatalkan), jam selesai lama ikut
       // dibersihkan - jangan sampai ada pasien aktif yang masih menyimpan jam selesai.
       const completedAt = !isCompleted
@@ -3132,14 +3011,6 @@ function reconcileQueueStates(existingState: any, incomingPayload: any) {
   const existingBoxes: any[] = Array.isArray(existingState.boxes) ? existingState.boxes : [];
   const incomingBoxes: any[] = Array.isArray(incomingPayload.boxes) ? incomingPayload.boxes : [];
 
-  // PENTING: gabungkan (bukan cuma pakai) tombstone box dari request INI dengan yang
-  // sudah tersimpan sebelumnya, lalu SIMPAN daftar gabungan itu ke state (lihat field
-  // deletedBoxIds di return di bawah). Sebelumnya daftar ini TIDAK PERNAH disimpan
-  // permanen - hanya dipakai sekali untuk memfilter box di request ini saja. Akibatnya,
-  // kotak yang kebetulan salah satu dari kotak bawaan/contoh sistem (lihat
-  // getInitialServerState) akan MUNCUL LAGI SENDIRI di load berikutnya, karena
-  // loadStateFromFile() punya logika "isi ulang kotak bawaan yang hilang" yang tidak
-  // bisa membedakan "memang belum pernah ada" dari "sudah sengaja dihapus".
   const existingDeletedBoxIds: string[] = Array.isArray(existingState.deletedBoxIds) ? existingState.deletedBoxIds : [];
   const incomingDeletedBoxIds: string[] = Array.isArray(incomingPayload.deletedBoxIds) ? incomingPayload.deletedBoxIds : [];
   const cumulativeDeletedBoxList = Array.from(new Set([...existingDeletedBoxIds, ...incomingDeletedBoxIds])).slice(-500);
@@ -3429,9 +3300,8 @@ app.get('/api/queue', (req, res) => {
   res.json({ status: 'ok', state: { ...safeState, isExplicitReset: false, resetConfirmed: false } });
 });
 
-// GET status kesehatan sistem (dipakai klien untuk menampilkan peringatan kalau
-// cadangan otomatis ke Cloud Firestore sedang bermasalah/dinonaktifkan - supaya
-// staf tahu SAAT ITU JUGA, bukan menemukan datanya hilang keesokan harinya).
+// GET status kesehatan sistem (dipakai klien untuk menampilkan indikator kalau
+// cadangan otomatis ke Cloud Firestore sedang bermasalah/dinonaktifkan).
 app.get('/api/system/status', (req, res) => {
   res.json({ status: 'ok', firestoreMirrorDisabled: isFirestoreMirrorDisabled });
 });
@@ -3937,9 +3807,8 @@ app.get('/api/daily-database', (req, res) => {
   try {
     const today = getLocalDateStringWIB();
     const targetDate = typeof req.query.date === 'string' && req.query.date.trim() ? req.query.date.trim() : today;
-    const currentState = loadStateFromFile();
-
     let visits = loadDailyArchiveForDate(targetDate);
+    const currentState = loadStateFromFile();
 
     // If querying today and archive is empty, populate from current queue
     if (targetDate === today && visits.length === 0 && currentState?.patients?.length > 0) {
@@ -4051,24 +3920,18 @@ app.post('/api/daily-database/visit', async (req, res) => {
             const existingQueueIdx = currentState.patients.findIndex((p: any) => p.id === updatedVisit.id);
             if (existingQueueIdx >= 0) {
               const queuePatient = currentState.patients[existingQueueIdx];
-              // Status ceklis pada antrean AKTIF ditentukan oleh jalur /api/queue yang
-              // membawa stempel waktu (lihat pickCompletionState). Tambalan dari arsip
-              // harian tidak boleh ikut menentukannya - dulu keduanya saling balapan,
-              // dan siapa yang tiba lebih dulu menentukan hasilnya, sehingga pembatalan
-              // ceklis kadang bertahan kadang balik lagi. Kolom lain tetap disinkronkan.
-              // Pasien lama yang belum berstempel tetap memakai perilaku lama.
-              // Arsip harian TIDAK PERNAH menyimpan completionUpdatedAt, jadi tambalan dari
-              // sana tidak akan pernah bisa membuktikan bahwa pembatalan ceklisnya lebih
-              // baru. Karena itu ia tidak boleh MEMUNDURKAN status ceklis pasien di papan.
-              // Dulu pengecualiannya ada pada pasien yang belum berstempel - dan justru
-              // pasien itulah yang paling rawan, karena catatan tak berstempel selalu yang
-              // paling tua. Arah sebaliknya (ikut menandai selesai) tetap diizinkan, sebab
-              // itu menambah pekerjaan yang tercatat, bukan menghapusnya.
+              // Status ceklis pada antrean AKTIF tidak boleh mundur oleh tambalan arsip harian.
+              // Harmonisasikan status ceklis menggunakan pickCompletionState agar status selesai
+              // pada antrean aktif tetap terjaga.
+              const { completed, completionUpdatedAt } = pickCompletionState(queuePatient, updatedVisit);
               const { completed: _vc, completedAt: _vca, ...visitWithoutCompletion } = updatedVisit as any;
-              const bolehIkutMenandaiSelesai = !queuePatient.completed && updatedVisit.completed === true;
-              currentState.patients[existingQueueIdx] = bolehIkutMenandaiSelesai
-                ? { ...queuePatient, ...updatedVisit }
-                : { ...queuePatient, ...visitWithoutCompletion };
+              currentState.patients[existingQueueIdx] = {
+                ...queuePatient,
+                ...visitWithoutCompletion,
+                completed,
+                completionUpdatedAt,
+                completedAt: completed ? (queuePatient.completedAt || updatedVisit.completedAt || new Date().toISOString()) : undefined,
+              };
               currentState.lastUpdated = new Date().toISOString();
               saveStateToFile(currentState);
               broadcastUpdate({ type: 'SYNC_STATE', state: currentState });
@@ -4995,46 +4858,51 @@ app.get('/api/events', (req, res) => {
 });
 
 async function flushPendingFirestoreMirrors(): Promise<void> {
-  // PENTING: cek data pending LANGSUNG (bukan lewat ada-tidaknya timer debounce). Saat
-  // mirroring baru saja aktif kembali setelah jeda kuota, data terbaru sudah tercatat di
-  // pendingX sejak PERTAMA kali ditulis (lihat mirrorArchiveMonthToFirestore dkk.), tapi
-  // TIDAK PERNAH menjadwalkan timer selama masih dijeda - kalau flush ini hanya memeriksa
-  // timer, data yang tertunda dari masa jeda kuota tetap tidak pernah terkirim. Delegasikan
-  // ke masing-masing fungsi flush-now supaya timer debounce MAUPUN timer jaminan-maksimal
-  // (maxWait) keduanya ikut dibersihkan dengan benar di satu tempat.
+  // PENTING: cek dan eksekusi data pending langsung dengan membersihkan timer debounce
+  // dan maxWait untuk keempat channel mirror ke Firestore.
   const tasks: Promise<any>[] = [];
 
-  if (pendingMirrorState) {
-    tasks.push(flushQueueStateMirrorNow());
-  } else if (mirrorDebounceTimer || mirrorMaxWaitTimer) {
+  // 1. Queue State
+  if (pendingMirrorState && !isFirestoreMirrorDisabled) {
+    tasks.push(flushQueueStateMirrorNow().catch((err) => console.warn('[Shutdown] Gagal flush queue state mirror:', err)));
+  } else {
     if (mirrorDebounceTimer) { clearTimeout(mirrorDebounceTimer); mirrorDebounceTimer = null; }
     if (mirrorMaxWaitTimer) { clearTimeout(mirrorMaxWaitTimer); mirrorMaxWaitTimer = null; }
   }
 
-  for (const monthKey of Array.from(pendingDailyArchiveMirrors.keys())) {
-    tasks.push(flushArchiveMonthMirrorNow(monthKey));
+  // 2. Daily Archive Months
+  const monthKeysToFlush = Array.from(pendingDailyArchiveMirrors.keys());
+  for (const monthKey of monthKeysToFlush) {
+    if (!isFirestoreMirrorDisabled) {
+      tasks.push(flushArchiveMonthMirrorNow(monthKey).catch((err) => console.warn(`[Shutdown] Gagal flush daily archive mirror (${monthKey}):`, err)));
+    }
   }
   for (const timer of dailyArchiveMirrorDebounceTimers.values()) clearTimeout(timer);
   dailyArchiveMirrorDebounceTimers.clear();
   for (const timer of dailyArchiveMirrorMaxWaitTimers.values()) clearTimeout(timer);
   dailyArchiveMirrorMaxWaitTimers.clear();
+  if (isFirestoreMirrorDisabled) {
+    pendingDailyArchiveMirrors.clear();
+  }
 
-  if (pendingMasterPatientsMirror) {
-    tasks.push(flushMasterPatientsMirrorNow());
-  } else if (masterPatientsMirrorDebounceTimer || masterPatientsMirrorMaxWaitTimer) {
+  // 3. Master Patients
+  if (pendingMasterPatientsMirror && !isFirestoreMirrorDisabled) {
+    tasks.push(flushMasterPatientsMirrorNow().catch((err) => console.warn('[Shutdown] Gagal flush master patients mirror:', err)));
+  } else {
     if (masterPatientsMirrorDebounceTimer) { clearTimeout(masterPatientsMirrorDebounceTimer); masterPatientsMirrorDebounceTimer = null; }
     if (masterPatientsMirrorMaxWaitTimer) { clearTimeout(masterPatientsMirrorMaxWaitTimer); masterPatientsMirrorMaxWaitTimer = null; }
   }
 
-  if (pendingRanapHistoryMirror) {
-    tasks.push(flushRanapHistoryMirrorNow());
-  } else if (ranapHistoryMirrorDebounceTimer || ranapHistoryMirrorMaxWaitTimer) {
+  // 4. Ranap History
+  if (pendingRanapHistoryMirror && !isFirestoreMirrorDisabled) {
+    tasks.push(flushRanapHistoryMirrorNow().catch((err) => console.warn('[Shutdown] Gagal flush ranap history mirror:', err)));
+  } else {
     if (ranapHistoryMirrorDebounceTimer) { clearTimeout(ranapHistoryMirrorDebounceTimer); ranapHistoryMirrorDebounceTimer = null; }
     if (ranapHistoryMirrorMaxWaitTimer) { clearTimeout(ranapHistoryMirrorMaxWaitTimer); ranapHistoryMirrorMaxWaitTimer = null; }
   }
 
   if (tasks.length > 0) {
-    console.log(`[Shutdown] Flushing ${tasks.length} pending Firestore mirror write(s)...`);
+    console.log(`[FirestoreMirror] Flushing ${tasks.length} pending Firestore mirror write(s)...`);
     await Promise.allSettled(tasks);
   }
 }
@@ -5056,10 +4924,6 @@ process.on('SIGTERM', () => { void handleShutdownSignal('SIGTERM'); });
 process.on('SIGINT', () => { void handleShutdownSignal('SIGINT'); });
 
 async function startServer() {
-  // Migrasi satu kali dari daily_archive.json lama (satu file untuk semua tanggal)
-  // ke format baru per-bulan, kalau file lama itu masih ada. Harus jalan sebelum
-  // hydrateDailyArchiveFromFirestoreIfNeeded() di bawah, supaya data lokal yang
-  // sudah ada tidak dianggap kosong lalu malah ditimpa oleh hydrate dari cloud.
   migrateLegacyDailyArchiveIfNeeded();
 
   // Pulihkan state dari Cloud Firestore dulu kalau disk lokal instance ini kosong/baru
@@ -5077,9 +4941,6 @@ async function startServer() {
     hydrateRanapHistoryFromFirestoreIfNeeded(),
   ]);
 
-  // Setelah hidrasi awal selesai, mulai sinkronisasi periodik supaya instance ini
-  // (kalau ternyata ada instance lain yang juga berjalan) tetap ikut menyamakan diri
-  // dengan data terbaru di Firestore, bukan cuma sekali di awal nyala.
   startPeriodicFirestoreSync();
 
   // Vite integration in development

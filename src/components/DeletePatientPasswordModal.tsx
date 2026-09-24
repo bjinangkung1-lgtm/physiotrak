@@ -39,8 +39,6 @@ interface DeletePatientPasswordModalProps {
   onClose: () => void;
   onConfirmDelete: () => void;
   patientName?: string;
-  // Dipakai ulang juga untuk otorisasi hapus KOTAK antrean (bukan cuma pasien) -
-  // props di bawah membiarkan judul & pesan menyesuaikan tanpa duplikasi modal.
   title?: string;
   confirmLabel?: string;
   warningTitle?: string;

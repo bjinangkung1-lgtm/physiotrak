@@ -18,21 +18,9 @@ export interface PatientTimeMetrics {
   registeredAt: Date;
   calledAt?: Date;
   completedAt?: Date;
-  // Response time in minutes: dari saat didaftarkan/ditulis hingga saat diceklis (atau waktu berjalan jika belum diceklis)
-  waitMinutes: number; 
-  responseTimeMinutes: number; 
-  serviceMinutes?: number;
-  totalMinutes?: number; 
-  waitStatus: 'fast' | 'normal' | 'moderate' | 'delayed';
-  statusLabel: string;
-  isCompliant: boolean;
-  isCurrentlyWaiting: boolean;
-  // true kalau waktu ceklis selesai tercatat lebih awal dari waktu input (mustahil secara nyata,
-  // biasanya karena jam tablet yang mencatat ceklis salah/mundur) - dikecualikan dari rata-rata & SPM.
-  isDataInvalid?: boolean;
-  // true kalau kunjungan DITUTUP tanpa pernah diceklis selesai - pasiennya dipindahkan
-  // ke terapis lain atau dihapus dari antrean. Timernya berhenti di waktu penutupan,
-  // dan barisnya dikecualikan dari hitungan pasien aktif serta peringkat keterlambatan.
+  // Penanda kunjungan yang ditutup tanpa pernah diceklis (dipindahkan / dihapus).
+  // Saat ada penanda ini, timer berhenti di waktu penutupan (bukan berjalan selamanya)
+  // dan baris ditandai "Dipindahkan" / "Dihapus" agar tidak lagi dianggap "Sedang Berjalan".
   isEnded?: boolean;
   endedReason?: 'dipindahkan' | 'dihapus';
   endedAt?: Date;
@@ -46,6 +34,19 @@ export interface PatientTimeMetrics {
   // Jam saat pasien benar-benar TERSEDIA untuk kotak ini - yaitu setelah tindakannya
   // di kotak lain selesai. Dipakai sebagai batas bawah jam mulai.
   tersediaSejak?: Date;
+  isEndedWithoutCompletion?: boolean;
+  // Response time in minutes: dari saat didaftarkan/ditulis hingga saat diceklis (atau waktu berjalan jika belum diceklis)
+  waitMinutes: number; 
+  responseTimeMinutes: number; 
+  serviceMinutes?: number;
+  totalMinutes?: number; 
+  waitStatus: 'fast' | 'normal' | 'moderate' | 'delayed';
+  statusLabel: string;
+  isCompliant: boolean;
+  isCurrentlyWaiting: boolean;
+  // true kalau waktu ceklis selesai tercatat lebih awal dari waktu input (mustahil secara nyata,
+  // biasanya karena jam tablet yang mencatat ceklis salah/mundur) - dikecualikan dari rata-rata & SPM.
+  isDataInvalid?: boolean;
   formattedWait: string;
   formattedResponseTime: string;
   formattedService?: string;
@@ -61,6 +62,7 @@ export interface BoxResponseMetrics {
   totalPatients: number;
   activeCount: number;
   completedCount: number;
+  endedCount: number; // Jumlah pasien yang ditutup tanpa diceklis (dipindahkan/dihapus)
   avgWaitMinutes: number; // Avg response time (input ke ceklis)
   avgResponseMinutes: number;
   avgTotalMinutes: number;
@@ -73,6 +75,7 @@ export interface ResponseTimeAnalyticsSummary {
   totalPatients: number;
   activePatientsCount: number;
   completedPatientsCount: number;
+  endedPatientsCount: number; // Pasien ditutup tanpa diceklis (dipindahkan/dihapus)
   invalidDataCount: number; // Jumlah data dengan jam ceklis < jam input (data tidak valid)
   avgWaitMinutes: number; // Rata-rata respon time (input ke ceklis)
   avgResponseMinutes: number;
@@ -240,11 +243,9 @@ export function calculatePatientTimeMetrics(
 
   const calledAt = patient.lastCalledAt ? new Date(patient.lastCalledAt) : undefined;
   const completedAt = patient.completedAt ? new Date(patient.completedAt) : undefined;
-
-  // Kunjungan yang ditutup tanpa pernah diceklis (dipindahkan / dihapus). Hanya berlaku
-  // kalau memang BELUM selesai - kalau sudah diceklis, jam ceklis yang menang.
-  const endedAtDate = patient.endedAt ? new Date(patient.endedAt) : undefined;
-  const isEnded = !patient.completed && !!endedAtDate && !isNaN(endedAtDate.getTime());
+  const endedAt = (patient as any).endedAt ? new Date((patient as any).endedAt) : undefined;
+  const endedReason = (patient as any).endedReason;
+  const isEndedWithoutCompletion = Boolean((patient as any).endedAt && !patient.completed);
 
   const parentBox = boxes.find(b => b.id === patient.boxId);
   const boxTitle = parentBox 
@@ -279,15 +280,17 @@ export function calculatePatientTimeMetrics(
     } else {
       responseTimeMinutes = Math.max(0, elapsedMinutes);
     }
-  } else if (isEnded && endedAtDate) {
-    // Kunjungan ditutup tanpa pernah diceklis. Timernya BERHENTI di waktu penutupan -
-    // tidak boleh terus berjalan sampai sekarang. Tanpa ini, baris di terapis asal
-    // terus membesar selamanya setelah pasien dipindahkan, dan mencemari laporan.
-    const effectiveStartTime = getEffectiveStartTime(endedAtDate.getTime());
-    const rawMinutes = !isNaN(effectiveStartTime)
-      ? Math.round((endedAtDate.getTime() - effectiveStartTime) / 60000)
-      : NaN;
-    responseTimeMinutes = (isNaN(rawMinutes) || rawMinutes < 0) ? 0 : rawMinutes;
+  } else if (isEndedWithoutCompletion && endedAt && !isNaN(endedAt.getTime())) {
+    // Kunjungan ditutup tanpa pernah diceklis (dipindahkan ke terapis lain / dihapus).
+    // Timer BERHENTI di jam saat kunjungan ditutup, tidak berjalan terus.
+    const effectiveStartTime = getEffectiveStartTime(endedAt.getTime());
+    const rawMinutes = !isNaN(effectiveStartTime) ? Math.round((endedAt.getTime() - effectiveStartTime) / 60000) : NaN;
+    if (isNaN(rawMinutes) || rawMinutes < 0) {
+      isDataInvalid = true;
+      responseTimeMinutes = 0;
+    } else {
+      responseTimeMinutes = rawMinutes;
+    }
   } else {
     // Pasien masih antre / berjalan -> Waktu respon dihitung dari pendaftaran hingga saat ini (dimulai paling awal dari jam buka 08:00 WIB)
     const effectiveStartTime = getEffectiveStartTime(now);
@@ -315,13 +318,11 @@ export function calculatePatientTimeMetrics(
     waitStatus = 'normal';
     statusLabel = 'Standar SPM (16-30m)';
   }
+  if (isEndedWithoutCompletion) {
+    statusLabel = endedReason === 'dipindahkan' ? 'Dipindahkan' : 'Dihapus';
+  }
   if (isDataInvalid) {
     statusLabel = 'Data Tidak Valid (jam ceklis < jam input)';
-  }
-  if (isEnded) {
-    statusLabel = patient.endedReason === 'dipindahkan'
-      ? 'Dipindahkan ke terapis lain'
-      : 'Dihapus dari antrean';
   }
 
   const isCompliant = !isDataInvalid && responseTimeMinutes <= 30;
@@ -341,6 +342,12 @@ export function calculatePatientTimeMetrics(
     registeredAt,
     calledAt,
     completedAt,
+    endedAt,
+    endedReason,
+    isEnded: isEndedWithoutCompletion,
+    isEndedWithoutCompletion,
+    tersediaSejak: (typeof tersediaSejakMs === 'number' && !isNaN(tersediaSejakMs))
+      ? new Date(tersediaSejakMs) : undefined,
     waitMinutes,
     responseTimeMinutes,
     serviceMinutes: responseTimeMinutes,
@@ -348,13 +355,8 @@ export function calculatePatientTimeMetrics(
     waitStatus,
     statusLabel,
     isCompliant,
-    isCurrentlyWaiting: !patient.completed && !isEnded,
+    isCurrentlyWaiting: !patient.completed && !isEndedWithoutCompletion,
     isDataInvalid,
-    isEnded,
-    endedReason: patient.endedReason,
-    endedAt: isEnded ? endedAtDate : undefined,
-    tersediaSejak: (typeof tersediaSejakMs === 'number' && !isNaN(tersediaSejakMs))
-      ? new Date(tersediaSejakMs) : undefined,
     formattedWait: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
     formattedResponseTime: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
     formattedService: isDataInvalid ? 'Data Tidak Valid' : formatMinutes(responseTimeMinutes),
@@ -375,10 +377,9 @@ export function computeResponseTimeAnalytics(
   });
 
   const totalPatients = patientMetrics.length;
-  // Kunjungan yang sudah ditutup (dipindahkan/dihapus) BUKAN pasien aktif - kalau ikut
-  // terhitung, satu pasien yang dipindahkan akan tampak sebagai dua pasien berjalan.
-  const activePatientsCount = patientMetrics.filter(p => !p.completed && !p.isEnded).length;
+  const activePatientsCount = patientMetrics.filter(p => p.isCurrentlyWaiting).length;
   const completedPatientsCount = patientMetrics.filter(p => p.completed).length;
+  const endedPatientsCount = patientMetrics.filter(p => p.isEndedWithoutCompletion).length;
   const invalidDataCount = patientMetrics.filter(p => p.isDataInvalid).length;
 
   // Data tidak valid (jam ceklis < jam input, biasanya akibat jam tablet salah/mundur) dikecualikan
@@ -419,7 +420,7 @@ export function computeResponseTimeAnalytics(
 
   // Longest Waiting Active Patients (Top 6)
   const longestWaitingActive = patientMetrics
-    .filter(p => !p.completed && !p.isEnded)
+    .filter(p => p.isCurrentlyWaiting)
     .sort((a, b) => b.responseTimeMinutes - a.responseTimeMinutes)
     .slice(0, 6);
 
@@ -432,8 +433,9 @@ export function computeResponseTimeAnalytics(
     .map(box => {
       const boxPatients = patientMetrics.filter(p => p.boxId === box.id);
       const totalBox = boxPatients.length;
-      const activeBox = boxPatients.filter(p => !p.completed && !p.isEnded).length;
+      const activeBox = boxPatients.filter(p => p.isCurrentlyWaiting).length;
       const completedBox = boxPatients.filter(p => p.completed).length;
+      const endedBox = boxPatients.filter(p => p.isEndedWithoutCompletion).length;
 
       const boxCompletedMetrics = boxPatients.filter(p => p.completed && !p.isDataInvalid && !p.isTindakanTambahan);
 
@@ -448,7 +450,7 @@ export function computeResponseTimeAnalytics(
         ? Math.round((bCompliant / boxCompletedMetrics.length) * 100)
         : 100;
 
-      const activeBoxPatients = boxPatients.filter(p => !p.completed && !p.isEnded);
+      const activeBoxPatients = boxPatients.filter(p => p.isCurrentlyWaiting);
       const longestActiveWaitMinutes = activeBoxPatients.length > 0 
         ? Math.max(...activeBoxPatients.map(p => p.responseTimeMinutes)) 
         : 0;
@@ -468,6 +470,7 @@ export function computeResponseTimeAnalytics(
         totalPatients: totalBox,
         activeCount: activeBox,
         completedCount: completedBox,
+        endedCount: endedBox,
         avgWaitMinutes: bAvgResp,
         avgResponseMinutes: bAvgResp,
         avgTotalMinutes: bAvgResp,
@@ -481,6 +484,7 @@ export function computeResponseTimeAnalytics(
     totalPatients,
     activePatientsCount,
     completedPatientsCount,
+    endedPatientsCount,
     invalidDataCount,
     avgWaitMinutes,
     avgResponseMinutes,

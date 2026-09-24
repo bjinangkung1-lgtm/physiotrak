@@ -66,7 +66,7 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
   const [now, setNow] = useState<number>(Date.now());
   const [searchQuery, setSearchQuery] = useState('');
   const [filterBoxId, setFilterBoxId] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'waiting' | 'delayed' | 'completed'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'waiting' | 'delayed' | 'completed' | 'ended'>('all');
   const [activeTab, setActiveTab] = useState<'overview' | 'therapists' | 'patients'>('overview');
 
   // Auto tick every 15 seconds for live wait time updates if viewing today
@@ -150,11 +150,8 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
         lastCalledAt: v.calledAt || null,
         completedAt: v.completedAt || null,
         calledCount: v.calledCount || 0,
-        // Penanda kunjungan yang ditutup tanpa diceklis (dipindahkan/dihapus). WAJIB
-        // ikut dibawa - objek ini disusun field-per-field, jadi kalau tidak disebut
-        // penandanya hilang dan timernya kembali berjalan selamanya.
-        endedAt: (v as any).endedAt || null,
-        endedReason: (v as any).endedReason,
+        endedAt: v.endedAt || null,
+        endedReason: v.endedReason,
       };
       (unified as any).boxTitle = v.boxTitle;
       (unified as any).officerName = v.officerName;
@@ -212,6 +209,7 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
     // dari hitungan SPM, jadi menampilkannya sebagai "terlambat" hanya menyesatkan.
     if (filterStatus === 'delayed' && (p.waitMinutes <= 30 || p.isEnded || p.isTindakanTambahan)) return false;
     if (filterStatus === 'completed' && !p.completed) return false;
+    if (filterStatus === 'ended' && !p.isEndedWithoutCompletion) return false;
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -236,6 +234,7 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
       ['Total Pasien Terdaftar', analytics.totalPatients],
       ['Pasien Aktif Berjalan', analytics.activePatientsCount],
       ['Pasien Selesai Diceklis', analytics.completedPatientsCount],
+      ['Pasien Ditutup (Dipindahkan/Dihapus)', analytics.endedPatientsCount],
       [''],
       ['METRIK UTAMA RESPON TIME'],
       ['Rata-rata Respon Time (Input ke Ceklis)', `${analytics.avgResponseMinutes} Menit`],
@@ -258,6 +257,7 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
       'Total Pasien',
       'Pasien Aktif',
       'Pasien Selesai',
+      'Pasien Ditutup (Pindah/Hapus)',
       'Rata-rata Respon Time (Mnt)',
       'Kepatuhan Standar SPM (<= 30 mnt)',
       'Respon Time Terlama Saat Ini (Mnt)'
@@ -269,6 +269,7 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
       b.totalPatients,
       b.activeCount,
       b.completedCount,
+      b.endedCount,
       b.avgResponseMinutes,
       `${b.complianceRate}%`,
       b.longestActiveWaitMinutes > 0 ? b.longestActiveWaitMinutes : '-'
@@ -300,12 +301,18 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
       p.officerName,
       p.boxTitle,
       p.actionCode || '-',
-      p.completed ? 'Selesai' : 'Sedang Berjalan',
+      p.isEndedWithoutCompletion 
+        ? (p.endedReason === 'dipindahkan' ? 'Dipindahkan' : 'Dihapus') 
+        : p.completed 
+        ? 'Selesai' 
+        : 'Sedang Berjalan',
       p.registeredAt && !isNaN(p.registeredAt.getTime())
         ? p.registeredAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
         : '-',
       p.completedAt && !isNaN(p.completedAt.getTime())
         ? p.completedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+        : p.endedAt && !isNaN(p.endedAt.getTime())
+        ? `${p.endedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} (${p.endedReason === 'dipindahkan' ? 'Pindah' : 'Hapus'})`
         : '-',
       p.responseTimeMinutes,
       p.waitStatus === 'fast'
@@ -849,6 +856,7 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
                     <option value="waiting">Sedang Menunggu</option>
                     <option value="delayed">Terlambat (&gt;30 mnt)</option>
                     <option value="completed">Sudah Selesai</option>
+                    <option value="ended">Dipindahkan / Dihapus</option>
                   </select>
                 </div>
 
@@ -910,6 +918,8 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
                             <td className="p-3 text-center font-mono text-slate-600">
                               {p.completedAt && !isNaN(p.completedAt.getTime())
                                 ? p.completedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+                                : p.endedAt && !isNaN(p.endedAt.getTime())
+                                ? `${p.endedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} (${p.endedReason === 'dipindahkan' ? 'Pindah' : 'Hapus'})`
                                 : '-'}
                             </td>
 
@@ -917,6 +927,8 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
                               <span className={`inline-block px-2 py-0.5 rounded font-mono font-black text-xs ${
                                 p.isDataInvalid
                                   ? 'bg-slate-700 text-white'
+                                  : p.isEndedWithoutCompletion
+                                  ? 'bg-slate-100 text-slate-700'
                                   : p.waitStatus === 'delayed'
                                   ? 'bg-rose-600 text-white animate-pulse'
                                   : p.waitStatus === 'moderate'
@@ -942,18 +954,17 @@ export const ResponseTimeAnalyticsModal: React.FC<ResponseTimeAnalyticsModalProp
                                 <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded font-bold text-[10px]" title="Jam ceklis selesai tercatat lebih awal dari jam input, kemungkinan jam tablet salah/mundur">
                                   ⚠ Data Tidak Valid
                                 </span>
+                              ) : p.isEndedWithoutCompletion ? (
+                                <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                                  p.endedReason === 'dipindahkan'
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : 'bg-slate-200 text-slate-700'
+                                }`}>
+                                  {p.endedReason === 'dipindahkan' ? 'Dipindahkan' : 'Dihapus'}
+                                </span>
                               ) : p.completed ? (
                                 <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold text-[10px]">
                                   Selesai
-                                </span>
-                              ) : p.isEnded ? (
-                                <span
-                                  className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded font-bold text-[10px]"
-                                  title={p.endedReason === 'dipindahkan'
-                                    ? 'Pasien dipindahkan ke terapis lain - timer dihentikan di jam pemindahan dan tidak ikut dihitung dalam rata-rata maupun SPM'
-                                    : 'Pasien dihapus dari antrean - timer dihentikan di jam penghapusan'}
-                                >
-                                  {p.endedReason === 'dipindahkan' ? 'Dipindahkan' : 'Dihapus'}
                                 </span>
                               ) : (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded font-bold text-[10px]">

@@ -683,9 +683,6 @@ export const DailyPatientDatabaseModal: React.FC<DailyPatientDatabaseModalProps>
                 <h2 className="text-sm sm:text-base md:text-lg font-black tracking-tight text-white leading-snug truncate">
                   Database Pasien & Register Harian
                 </h2>
-                <p className="text-[10px] sm:text-xs text-teal-200/80 sm:text-slate-400 font-medium leading-tight truncate">
-                  Buku kunjungan harian & Master Pasien IRM
-                </p>
               </div>
             </div>
 

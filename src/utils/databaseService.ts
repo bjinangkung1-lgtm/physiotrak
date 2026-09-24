@@ -850,13 +850,10 @@ export const databaseService = {
         savedVisit = data.visit;
       }
 
-      // Catatan: dulu di sini ada push tambahan ke koleksi Firestore lama `daily_archives`
-      // lewat baca-seluruh-koleksi -> ubah -> tulis-seluruh-array. Itu race condition antar
-      // beberapa perangkat/tab (dua perangkat menulis dokumen tanggal yang sama nyaris
-      // bersamaan bisa saling menimpa, membuat status "selesai" balik jadi "berjalan").
-      // Sudah dihapus - server (baris di atas) sudah menyimpan dengan aman lewat antrian
-      // tulis (enqueueQueueWrite), dan server sendiri sudah punya mirror ke Firestore
-      // (mirrorArchiveMonthToFirestore di server.ts) yang jadi cadangan cloud yang aman.
+      // Server sudah menyimpan ke daily_archive via write queue dan mencadangkannya ke Firestore
+      // secara konsisten (mirrorArchiveMonthToFirestore). Direct write dari klien ke Firestore
+      // dihapus untuk mencegah race condition / penimpaan data antar tablet.
+
       return savedVisit || (visit as DailyPatientVisit);
     } catch (err) {
       console.error('Failed to save daily visit:', err);

@@ -70,15 +70,6 @@ export const normalizeAndMergeBoxes = (rawList: any[]): QueueBox[] => {
     .map((b: QueueBox) => {
       let officerName = b.officerName || '';
       let category = b.category;
-      // PENTING: `id` kotak TIDAK PERNAH ditulis ulang di sini lagi (dulu dipaksa
-      // berubah berdasarkan kecocokan nama, mis. officerName mengandung "monalisa"
-      // -> id dipaksa jadi 'box-monalisa'). Itu berbahaya: begitu 2 kotak sama-sama
-      // "dipaksa" ke id yang sama (mis. staf ganti nama kotak lain jadi mengandung
-      // kata yang sama), keduanya tabrakan lalu salah satunya dibuang di langkah
-      // dedup di bawah - kotak itu hilang dari layar. Id sekarang dibuat SEKALI
-      // saat kotak pertama kali dibuat (lihat handleAddBox) dan tidak pernah
-      // berubah lagi oleh normalisasi ini - nama/kategori/judul tetap dirapikan
-      // otomatis seperti biasa (aman, murni tampilan), cuma id yang dikunci.
       const id = b.id;
       let title = (b.title || '').trim();
 
@@ -113,7 +104,6 @@ export const normalizeAndMergeBoxes = (rawList: any[]): QueueBox[] => {
       } else if (id === 'box-jemputan') {
         title = 'ANTRIAN JEMPUTAN RANAP IRM RSPP';
       } else if (title.includes('(')) {
-        // Strip any legacy date in parentheses for all boxes
         title = title.split('(')[0].trim();
       }
 
@@ -247,26 +237,12 @@ export const getLocalRanapTombstones = ranapTombstoneStore.getTombstones;
 export const addLocalRanapTombstone = ranapTombstoneStore.addTombstone;
 export const clearLocalRanapTombstones = ranapTombstoneStore.clearTombstones;
 
-// Id pasien yang sudah dihapus reset (bukan berdasarkan jam device, tapi id spesifik dari
-// server) - dipakai supaya pasien BARU tidak pernah ikut tersaring hanya karena jam tablet
-// yang menginputnya salah/mundur, sekaligus tetap menahan pasien lama yang mencoba "hidup
-// lagi" dari device yang belum sinkron reset.
 const preResetPatientStore = createLocalTombstoneStore('antrian_pre_reset_patient_ids', 2000);
 export const getLocalPreResetPatientIds = preResetPatientStore.getTombstones;
 export const addLocalPreResetPatientId = preResetPatientStore.addTombstone;
 export const clearLocalPreResetPatientIds = preResetPatientStore.clearTombstones;
 export const removeLocalPreResetPatientId = preResetPatientStore.removeTombstone;
 
-// Menerima state ber-flag reset artinya perangkat ini LANGSUNG mengosongkan seluruh
-// antrean di layarnya. Itu memang perilaku yang benar untuk tombol "Bersihkan Antrean",
-// tapi berarti satu siaran yang keliru membawa flag itu bisa mengosongkan layar petugas
-// tanpa ada yang menekan apa pun. Dua penjagaan di bawah ini membuat hal itu tidak
-// mungkin terjadi lagi:
-//   1. Reset yang sah SELALU berisi daftar pasien kosong. Siaran yang mengaku reset
-//      tapi masih membawa daftar pasien adalah state tidak konsisten - diabaikan.
-//   2. Reset hanya diproses kalau benar-benar LEBIH BARU dari reset terakhir yang sudah
-//      pernah diproses perangkat ini, sehingga siaran lama yang terulang (mis. dari
-//      instance server yang filenya tertinggal) tidak bisa mengosongkan layar berkali-kali.
 export const LAST_RESET_AT_KEY = 'antrian_last_reset_at';
 
 export function shouldApplyResetEvent(payload: any): boolean {
@@ -330,20 +306,6 @@ function generateUniqueId(prefix: string = 'id'): string {
   return `${prefix}-${Date.now()}-${entropy}`;
 }
 
-// Menentukan status ceklis mana yang menang saat dua versi pasien digabungkan.
-//
-// Dulu aturannya "sekali selesai, tetap selesai" (operator ATAU). Itu memang menjaga
-// hal yang nyata: tablet yang lama tertidur lalu bangun membawa data usang tidak boleh
-// menghidupkan kembali pasien yang sudah diceklis petugas lain. Tapi akibatnya
-// PEMBATALAN ceklis tidak pernah bisa menular ke perangkat lain sama sekali - status
-// hanya bisa naik, tidak pernah turun.
-//
-// Sekarang pemenangnya ditentukan oleh JAM perubahan (completionUpdatedAt), pola yang
-// sama seperti yang sudah dipakai untuk perubahan isi kotak. Pembatalan ikut menular,
-// sementara tablet basi tetap kalah karena stempelnya lebih tua.
-//
-// Data lama yang belum punya stempel sama sekali tetap memakai aturan lama, supaya
-// tidak ada perilaku yang berubah mendadak saat pembaruan ini baru dipasang.
 export function pickCompletionState(
   existing: { completed?: boolean; completionUpdatedAt?: string },
   incoming: { completed?: boolean; completionUpdatedAt?: string }
@@ -357,16 +319,9 @@ export function pickCompletionState(
   // BISA DIBUKTIKAN lebih baru: kedua sisi berstempel, dan stempel yang masuk benar-benar
   // lebih baru. Kalau tidak bisa dibuktikan, ceklis dipertahankan.
   //
-  // KENAPA: dulu sisi yang masuk menang begitu saja asal IA berstempel, walau sisi yang
-  // sudah selesai tidak berstempel sama sekali. Padahal catatan yang tidak berstempel itu
-  // justru yang paling tua - mis. pasien lama, atau salinan papan antrean yang dipulihkan
-  // dari cadangan. Akibatnya pasien yang sudah diceklis bisa kembali "belum selesai"
-  // dengan sendirinya, dan kemundurannya ikut tertulis ke register harian lewat
-  // sinkronisasi. Persis itu yang terjadi pada 22 September 2026 dini hari: empat pasien
-  // yang sudah selesai kembali berstatus menunggu tanpa ada yang menyentuhnya.
-  //
-  // Arah sebaliknya (belum selesai -> selesai) sengaja TIDAK diperketat: menambahkan
-  // ceklis tidak menghilangkan pekerjaan siapa pun, sedangkan membatalkannya iya.
+  // Aturan ini WAJIB sama persis dengan pickCompletionState di server.ts. Kalau hanya
+  // sisi server yang diperketat, tablet dan server mengambil keputusan yang berbeda
+  // tentang status ceklis, dan ceklis akan terlihat berkedip tiap kali menyamakan diri.
   const exDone = Boolean(existing && existing.completed);
   const inDone = Boolean(incoming && incoming.completed);
   if (exDone && !inDone) {
@@ -428,8 +383,7 @@ export function reconcileClientPatients(
       const lastCalledAt = inP.lastCalledAt && (!existing.lastCalledAt || new Date(inP.lastCalledAt) >= new Date(existing.lastCalledAt))
         ? inP.lastCalledAt
         : existing.lastCalledAt;
-      // Kalau hasil akhirnya TIDAK selesai, jam selesai lama ikut dibersihkan supaya
-      // tidak ada pasien aktif yang masih menyimpan jam selesai dari ceklis yang dibatalkan.
+      // Kalau hasil akhirnya TIDAK selesai, jam selesai lama ikut dibersihkan.
       const completedAt = !isCompleted
         ? undefined
         : (inP.completedAt && (!existing.completedAt || new Date(inP.completedAt) >= new Date(existing.completedAt))
@@ -895,8 +849,8 @@ export default function App() {
 
   // Pantau status kesehatan cadangan cloud (Firestore) secara berkala. Kalau
   // cadangan otomatis sedang dinonaktifkan (mis. kuota harian habis), tampilkan
-  // peringatan yang TERLIHAT ke staf saat itu juga - supaya tidak ada lagi
-  // kejadian "data hilang tanpa peringatan" yang baru ketahuan keesokan harinya.
+  // indikator kecil ke staf - supaya tidak ada lagi kejadian "data hilang tanpa
+  // peringatan" yang baru ketahuan keesokan harinya.
   useEffect(() => {
     let isMounted = true;
     const checkBackupStatus = () => {
@@ -1153,19 +1107,6 @@ export default function App() {
         });
       }
 
-      // PENTING: sama seperti di jalur sinkronisasi lain (SSE/BroadcastChannel &
-      // REST fetch awal) - JANGAN anggap `lastResetAt` (watermark PERMANEN dari
-      // reset TERAKHIR KALI, bisa dari kemarin) sebagai sinyal reset, dan JANGAN
-      // anggap validCloudPatients kosong sebagai tanda reset. Snapshot Firestore
-      // yang sedang di-hydrate saat cold-start/reload bisa kebetulan tertinggal
-      // (belum ter-mirror pasien aktif terbaru dari perangkat lain) sehingga
-      // tampak "0 pasien" padahal antrean sebenarnya tidak kosong - kalau ini
-      // dianggap reset, `setPatients([])` di bawah akan menghapus pasien yang
-      // BARU SAJA benar dipulihkan lewat fetch REST /api/queue (race kondisi
-      // antara 2 sumber hydrasi awal). Flag isExplicitReset/resetConfirmed pun
-      // TIDAK lagi dipercaya begitu saja - lihat shouldApplyResetEvent: reset
-      // hanya diproses kalau memang lebih baru dari reset terakhir yang sudah
-      // pernah diterapkan perangkat ini DAN daftar pasiennya memang kosong.
       const isCloudExplicitReset = shouldApplyResetEvent(cloudState);
 
       if (isCloudExplicitReset) {
@@ -1382,24 +1323,6 @@ export default function App() {
       unsubscribeSecurity();
     };
   }, []);
-
-  const handleUpdateBox = (updatedBox: QueueBox) => {
-    // Cegah kotak ini "bertabrakan" dengan kotak lain yang masih aktif untuk
-    // terapis yang sama - kalau dibiarkan, keduanya akan dianggap 1 kotak
-    // kembar dan salah satunya hilang dari layar di langkah dedup. Kalau
-    // memang berniat menggabungkan 2 kotak jadi 1, gunakan Hapus Kotak dengan
-    // opsi pindahkan pasien, bukan ganti nama.
-    const newKey = getCanonicalTherapistKey(updatedBox.officerName, updatedBox.location, updatedBox.id);
-    const collidesWith = boxes.find(b => b.id !== updatedBox.id && getCanonicalTherapistKey(b.officerName, b.location, b.id) === newKey);
-    if (collidesWith) {
-      showAppToast(`Nama "${updatedBox.officerName}" sudah dipakai kotak "${collidesWith.title}". Gunakan nama lain, atau hapus salah satu kotak dengan opsi pindahkan pasien kalau memang ingin digabungkan.`);
-      return;
-    }
-
-    hasLocalMutationRef.current = true;
-    const stamped = { ...updatedBox, contentUpdatedAt: new Date().toISOString() };
-    setBoxes(prev => prev.map(b => b.id === stamped.id ? stamped : b));
-  };
 
   // Broadcast local changes to all connected devices ONLY when triggered locally AND after hydration
   useEffect(() => {
@@ -1948,10 +1871,6 @@ export default function App() {
 
   // Add New Box
   const handleAddBox = (boxData: Omit<QueueBox, 'id' | 'createdAt'>) => {
-    // Cegah bikin kotak duplikat untuk terapis yang sama - kalau dibiarkan,
-    // kotak baru ini akan langsung "hilang lagi" di sinkronisasi berikutnya
-    // karena dianggap kembar dari kotak yang sudah ada (lihat langkah dedup
-    // di normalizeAndMergeBoxes).
     const newKey = getCanonicalTherapistKey(boxData.officerName, boxData.location, '');
     const collidesWith = boxes.find(b => getCanonicalTherapistKey(b.officerName, b.location, b.id) === newKey);
     if (collidesWith) {
@@ -1971,6 +1890,20 @@ export default function App() {
     };
     setBoxes(prev => [...prev, newBox]);
     showAppToast(`Kotak antrean "${newBox.title}" berhasil ditambahkan.`);
+  };
+
+  // Update Box
+  const handleUpdateBox = (updatedBox: QueueBox) => {
+    const newKey = getCanonicalTherapistKey(updatedBox.officerName, updatedBox.location, updatedBox.id);
+    const collidesWith = boxes.find(b => b.id !== updatedBox.id && getCanonicalTherapistKey(b.officerName, b.location, b.id) === newKey);
+    if (collidesWith) {
+      showAppToast(`Nama "${updatedBox.officerName}" sudah dipakai kotak "${collidesWith.title}". Gunakan nama lain, atau hapus salah satu kotak dengan opsi pindahkan pasien kalau memang ingin digabungkan.`);
+      return;
+    }
+
+    hasLocalMutationRef.current = true;
+    const stamped = { ...updatedBox, contentUpdatedAt: new Date().toISOString() };
+    setBoxes(prev => prev.map(b => b.id === stamped.id ? stamped : b));
   };
 
   // Toggle Box Pin
@@ -2068,40 +2001,44 @@ export default function App() {
     setPendingDeleteBox({ boxId, transferTargetBoxId, boxTitle: target.title });
   };
 
-  // Delete Patient
-  const handleDeletePatient = (
-    patientId: string,
-    endedReason: 'dipindahkan' | 'dihapus' = 'dihapus'
-  ) => {
+  // Delete Patient (menutup catatan kunjungan di arsip harian agar Respon Time tidak berjalan selamanya)
+  const handleDeletePatient = (patientId: string, endedReason: 'dipindahkan' | 'dihapus' = 'dihapus') => {
     hasLocalMutationRef.current = true;
     const target = patients.find(p => p.id === patientId);
+    if (target) {
+      const todayWIB = getLocalDateStringWIB();
+      const targetBox = boxes.find(b => b.id === target.boxId);
+      databaseService.saveDailyVisit(todayWIB, {
+        id: target.id,
+        visitDate: todayWIB,
+        patientId: target.patientId || target.id,
+        medicalRecordNo: target.medicalRecordNo,
+        patientName: target.patientName,
+        boxId: target.boxId,
+        boxTitle: target.boxTitle || (targetBox ? targetBox.title : target.boxId),
+        officerName: target.officerName || (targetBox ? targetBox.officerName : ''),
+        category: target.category || (targetBox ? targetBox.category : 'fisio'),
+        firstOfficerName: target.firstOfficerName,
+        firstBoxTitle: target.firstBoxTitle,
+        queueNumber: target.queueNumber || '',
+        actionCode: target.actionCode || '',
+        diagnosis: target.diagnosis || '',
+        isWarning: !!target.isWarning,
+        isRanap: !!target.isRanap,
+        note: target.note || '',
+        phoneNumber: target.phoneNumber || '',
+        completed: !!target.completed,
+        registeredAt: target.createdAt,
+        calledAt: target.lastCalledAt || null,
+        completedAt: target.completedAt || null,
+        calledCount: target.calledCount || 0,
+        endedAt: new Date().toISOString(),
+        endedReason,
+      }).catch(err => console.warn('Proactive delete daily visit close error:', err));
+    }
     addLocalTombstone(patientId);
     deletedPatientIdsRef.current.push(patientId);
     setPatients(prev => prev.filter(p => p.id !== patientId));
-
-    // TUTUP catatan kunjungannya di arsip harian.
-    //
-    // Membuang pasien dari antrean hidup saja TIDAK CUKUP. Respon Time membaca arsip
-    // kunjungan, bukan cuma antrean - jadi catatan yang ditinggalkan dengan
-    // completed=false akan terus terhitung sebagai "Sedang Berjalan" selamanya, dan
-    // timernya tidak pernah berhenti. Itulah yang terjadi saat pasien dipindahkan dari
-    // satu terapis ke terapis lain: baris di terapis asal terus berjalan tanpa akhir,
-    // mencemari rata-rata respon time, kepatuhan SPM, dan hitungan pasien aktif.
-    //
-    // Yang ditulis HANYA penanda penutup - bukan completed=true. Terapis asal memang
-    // tidak pernah menuntaskan pasien itu, dan menandainya selesai akan membuat satu
-    // pasien terhitung dua kali di register harian.
-    if (target && target.patientName && target.medicalRecordNo) {
-      databaseService.saveDailyVisit(getLocalDateStringWIB(), {
-        id: patientId,
-        patientName: target.patientName,
-        medicalRecordNo: target.medicalRecordNo,
-        endedAt: new Date().toISOString(),
-        endedReason,
-      }).catch((err) => {
-        console.warn('[Antrean] Gagal menutup catatan kunjungan yang dihapus/dipindahkan:', err);
-      });
-    }
   };
 
   // Meminta konfirmasi password sebelum benar-benar menghapus pasien (mencegah
@@ -2143,27 +2080,24 @@ export default function App() {
       lastCalledAt: visit.calledAt || undefined,
     };
 
-    hasLocalMutationRef.current = true;
-    knownPatientIdsRef.current.add(restoredPatient.id);
-
-    // Pasien ini dikembalikan dengan id ASLI-nya. Kalau dia tadinya ikut terhapus oleh
-    // "Bersihkan Antrean" atau "Bersihkan Kotak", id-nya masih tercatat sebagai
-    // "sudah dihapus" - baik di perangkat ini maupun di server. Catatan itu harus
-    // dicabut lebih dulu, kalau tidak pasiennya akan tampil sekejap lalu hilang lagi
-    // begitu perangkat menyamakan diri dengan server.
+    // Cabut dari catatan penghapusan lokal DAN beritahu server untuk mencabutnya
+    // dari catatan permanen. Tanpa ini, pasien yang baru dikembalikan akan langsung
+    // tersaring lagi pada penyelarasan berikutnya atau saat server me-reload state.
     removeLocalTombstone(restoredPatient.id);
     removeLocalPreResetPatientId(restoredPatient.id);
-    deletedPatientIdsRef.current = deletedPatientIdsRef.current.filter(id => id !== restoredPatient.id);
     fetch('/api/queue/restore-patient', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ patientIds: [restoredPatient.id] }),
-    }).catch(err => console.warn('Gagal mencabut catatan penghapusan di server:', err));
+    }).catch(err => {
+      console.warn('[RestorePatient] Gagal memberitahu server untuk mencabut catatan penghapusan:', err);
+    });
 
+    hasLocalMutationRef.current = true;
+    knownPatientIdsRef.current.add(restoredPatient.id);
     setPatients(prev => (prev.some(p => p.id === restoredPatient.id) ? prev : [...prev, restoredPatient]));
     showAppToast(`Pasien "${restoredPatient.patientName}" berhasil dikembalikan ke antrean.`);
   };
-
 
   // Update Patient Details
   const handleUpdatePatient = (updatedPatient: PatientItem) => {
@@ -2458,20 +2392,12 @@ export default function App() {
         };
       });
 
-      // Flush to server daily archive
+      // Flush to server daily archive (server akan mencadangkannya secara aman dan teratur ke Firestore)
       fetch('/api/daily-database/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: today, visits: currentVisits }),
       }).catch(err => console.warn('Failed to commit daily archive batch on reset:', err));
-
-      // Catatan: dulu di sini ada push tambahan ke koleksi Firestore lama `daily_archives`
-      // lewat baca-seluruh-koleksi -> ubah -> tulis-seluruh-array. Sudah dihapus karena race
-      // condition antar beberapa perangkat/tab yang menekan "Bersihkan Antrean"/menyelesaikan
-      // pasien nyaris bersamaan bisa saling menimpa dokumen tanggal yang sama, membuat status
-      // "selesai" balik jadi "berjalan" di laporan Respon Time. Server (baris di atas) sudah
-      // aman lewat antrian tulis (enqueueQueueWrite) dan sudah punya mirror Firestore sendiri
-      // (mirrorArchiveMonthToFirestore di server.ts) sebagai cadangan cloud.
     }
 
     // 3. Call server explicit purge endpoint
@@ -2571,7 +2497,6 @@ export default function App() {
 
   const visiblePinnedBoxes = pinnedBoxes.filter(isBoxVisibleInSearch);
   const visibleOtherBoxes = otherBoxes.filter(isBoxVisibleInSearch);
-
   const estimateBoxHeight = (box: QueueBox): number => {
     const boxPatientCount = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box)).length;
     const baseHeight = 160; // header + footer + empty-state placeholder
@@ -2677,9 +2602,9 @@ export default function App() {
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-teal-200/20 rounded-full blur-3xl pointer-events-none -z-10" />
       <div className="fixed bottom-10 right-1/4 w-96 h-96 bg-cyan-200/20 rounded-full blur-3xl pointer-events-none -z-10" />
 
-      {/* Indikator kecil kalau cadangan cloud sedang bermasalah - sengaja dibuat
-          diskret (titik kuning berkedip, tanpa teks) supaya tidak bikin heboh
-          staf umum; detailnya cuma muncul kalau diketuk. Otomatis hilang begitu
+      {/* Indikator kecil kalau cadangan cloud sedang bermasalah - diskret
+          (titik kuning berkedip, tanpa teks) supaya tidak bikin heboh staf
+          umum; detailnya cuma muncul kalau diketuk. Otomatis hilang begitu
           statusnya pulih (polling tiap 30 detik). */}
       {isCloudBackupDegraded && (
         <div className="fixed top-2.5 right-2.5 z-[9999]">
@@ -2885,7 +2810,6 @@ export default function App() {
               onDeleteNote={handleDeleteCommunicationNote}
             />
 
-
             {/* PINNED BOXES SECTION */}
             {visiblePinnedBoxes.length > 0 && (
               <section className="space-y-3">
@@ -2895,55 +2819,55 @@ export default function App() {
                 </div>
 
                 <div className="flex items-start gap-5">
-                  {distributeIntoColumns(visiblePinnedBoxes, boxColumnCount).map((column, columnIndex) => (
-                    <div key={columnIndex} className="flex-1 min-w-0 flex flex-col gap-5">
-                      {column.map((box) => {
+                  {distributeIntoColumns(visiblePinnedBoxes, boxColumnCount).map((columnBoxes, colIdx) => (
+                    <div key={colIdx} className="flex-1 min-w-0 flex flex-col gap-5">
+                      {columnBoxes.map((box) => {
                         const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
                         return (
                           <div key={box.id} ref={registerBoxHeightRef(box.id)}>
-                          <QueueBoxCard
-                            box={box}
-                            patients={boxPatients}
-                            allBoxes={boxes}
-                            isDragDisabled={!!searchQuery.trim() || !!selectedTherapistBoxId || statusFilter !== 'all'}
-                            isDragging={draggedBoxId === box.id}
-                            isDropTarget={dragOverBoxId === box.id && draggedBoxId !== box.id}
-                            onDragStartBox={handleDragStartBox}
-                            onDragEndBox={handleDragEndBox}
-                            onDragOverBox={handleDragOverBox}
-                            onDropBox={handleDropBox}
-                            onMoveBoxStep={handleMoveBoxStep}
-                            onTogglePin={handleTogglePin}
-                            onToggleCompletePatient={handleToggleCompletePatient}
-                            onCallPatient={handleCallPatient}
-                            onCallNextInBox={handleCallNextInBox}
-                            onClearUnread={handleClearBoxUnread}
-                            onAddPatientToBox={(bId) => {
-                              setAddPatientBoxId(bId);
-                              setIsAddPatientOpen(true);
-                            }}
-                            onViewHistory={(b) => {
-                              setHistoryBox(b);
-                              setIsHistoryOpen(true);
-                            }}
-                            onUpdateBoxColor={handleUpdateBoxColor}
-                            onUpdateBoxImage={handleUpdateBoxImage}
-                            onUpdateBoxImages={handleUpdateBoxImages}
-                            onDeleteBox={handleRequestDeleteBox}
-                            onClearBoxPatients={handleClearBoxPatients}
-                            onDeletePatient={handleRequestDeletePatient}
-                            onRemovePatientFromBox={handleDeletePatient}
-                            onUpdatePatient={handleUpdatePatient}
-                            onEditBox={(b) => setEditingBox(b)}
-                            onOpenPatientQR={(p, b) => {
-                              setQrModalPatient(p);
-                              setQrModalBox(b);
-                              setIsQRModalOpen(true);
-                            }}
-                            onAddPatient={handleAddPatient}
-                            onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
-                            onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
-                          />
+                            <QueueBoxCard
+                              box={box}
+                              patients={boxPatients}
+                              allBoxes={boxes}
+                              isDragDisabled={!!searchQuery.trim() || !!selectedTherapistBoxId || statusFilter !== 'all'}
+                              isDragging={draggedBoxId === box.id}
+                              isDropTarget={dragOverBoxId === box.id && draggedBoxId !== box.id}
+                              onDragStartBox={handleDragStartBox}
+                              onDragEndBox={handleDragEndBox}
+                              onDragOverBox={handleDragOverBox}
+                              onDropBox={handleDropBox}
+                              onMoveBoxStep={handleMoveBoxStep}
+                              onTogglePin={handleTogglePin}
+                              onToggleCompletePatient={handleToggleCompletePatient}
+                              onCallPatient={handleCallPatient}
+                              onCallNextInBox={handleCallNextInBox}
+                              onClearUnread={handleClearBoxUnread}
+                              onAddPatientToBox={(bId) => {
+                                setAddPatientBoxId(bId);
+                                setIsAddPatientOpen(true);
+                              }}
+                              onViewHistory={(b) => {
+                                setHistoryBox(b);
+                                setIsHistoryOpen(true);
+                              }}
+                              onUpdateBoxColor={handleUpdateBoxColor}
+                              onUpdateBoxImage={handleUpdateBoxImage}
+                              onUpdateBoxImages={handleUpdateBoxImages}
+                              onDeleteBox={handleRequestDeleteBox}
+                              onClearBoxPatients={handleClearBoxPatients}
+                              onDeletePatient={handleRequestDeletePatient}
+                              onRemovePatientFromBox={handleDeletePatient}
+                              onUpdatePatient={handleUpdatePatient}
+                              onEditBox={(b) => setEditingBox(b)}
+                              onOpenPatientQR={(p, b) => {
+                                setQrModalPatient(p);
+                                setQrModalBox(b);
+                                setIsQRModalOpen(true);
+                              }}
+                              onAddPatient={handleAddPatient}
+                              onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
+                              onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
+                            />
                           </div>
                         );
                       })}
@@ -2995,55 +2919,55 @@ export default function App() {
             </div>
           ) : (
             <div className="flex items-start gap-5">
-              {distributeIntoColumns(visibleOtherBoxes, boxColumnCount).map((column, columnIndex) => (
-                <div key={columnIndex} className="flex-1 min-w-0 flex flex-col gap-5">
-                  {column.map((box) => {
+              {distributeIntoColumns(visibleOtherBoxes, boxColumnCount).map((columnBoxes, colIdx) => (
+                <div key={colIdx} className="flex-1 min-w-0 flex flex-col gap-5">
+                  {columnBoxes.map((box) => {
                     const boxPatients = patients.filter(p => p.boxId === box.id && filterPatientMatch(p, box));
                     return (
                       <div key={box.id} ref={registerBoxHeightRef(box.id)}>
-                      <QueueBoxCard
-                        box={box}
-                        patients={boxPatients}
-                        allBoxes={boxes}
-                        isDragDisabled={!!searchQuery.trim() || !!selectedTherapistBoxId || statusFilter !== 'all'}
-                        isDragging={draggedBoxId === box.id}
-                        isDropTarget={dragOverBoxId === box.id && draggedBoxId !== box.id}
-                        onDragStartBox={handleDragStartBox}
-                        onDragEndBox={handleDragEndBox}
-                        onDragOverBox={handleDragOverBox}
-                        onDropBox={handleDropBox}
-                        onMoveBoxStep={handleMoveBoxStep}
-                        onTogglePin={handleTogglePin}
-                        onToggleCompletePatient={handleToggleCompletePatient}
-                        onCallPatient={handleCallPatient}
-                        onCallNextInBox={handleCallNextInBox}
-                        onClearUnread={handleClearBoxUnread}
-                        onAddPatientToBox={(bId) => {
-                          setAddPatientBoxId(bId);
-                          setIsAddPatientOpen(true);
-                        }}
-                        onViewHistory={(b) => {
-                          setHistoryBox(b);
-                          setIsHistoryOpen(true);
-                        }}
-                        onUpdateBoxColor={handleUpdateBoxColor}
-                        onUpdateBoxImage={handleUpdateBoxImage}
-                        onUpdateBoxImages={handleUpdateBoxImages}
-                        onDeleteBox={handleRequestDeleteBox}
-                        onClearBoxPatients={handleClearBoxPatients}
-                        onDeletePatient={handleRequestDeletePatient}
-                        onRemovePatientFromBox={handleDeletePatient}
-                        onUpdatePatient={handleUpdatePatient}
-                        onEditBox={(b) => setEditingBox(b)}
-                        onOpenPatientQR={(p, b) => {
-                          setQrModalPatient(p);
-                          setQrModalBox(b);
-                          setIsQRModalOpen(true);
-                        }}
-                        onAddPatient={handleAddPatient}
-                        onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
-                        onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
-                      />
+                        <QueueBoxCard
+                          box={box}
+                          patients={boxPatients}
+                          allBoxes={boxes}
+                          isDragDisabled={!!searchQuery.trim() || !!selectedTherapistBoxId || statusFilter !== 'all'}
+                          isDragging={draggedBoxId === box.id}
+                          isDropTarget={dragOverBoxId === box.id && draggedBoxId !== box.id}
+                          onDragStartBox={handleDragStartBox}
+                          onDragEndBox={handleDragEndBox}
+                          onDragOverBox={handleDragOverBox}
+                          onDropBox={handleDropBox}
+                          onMoveBoxStep={handleMoveBoxStep}
+                          onTogglePin={handleTogglePin}
+                          onToggleCompletePatient={handleToggleCompletePatient}
+                          onCallPatient={handleCallPatient}
+                          onCallNextInBox={handleCallNextInBox}
+                          onClearUnread={handleClearBoxUnread}
+                          onAddPatientToBox={(bId) => {
+                            setAddPatientBoxId(bId);
+                            setIsAddPatientOpen(true);
+                          }}
+                          onViewHistory={(b) => {
+                            setHistoryBox(b);
+                            setIsHistoryOpen(true);
+                          }}
+                          onUpdateBoxColor={handleUpdateBoxColor}
+                          onUpdateBoxImage={handleUpdateBoxImage}
+                          onUpdateBoxImages={handleUpdateBoxImages}
+                          onDeleteBox={handleRequestDeleteBox}
+                          onClearBoxPatients={handleClearBoxPatients}
+                          onDeletePatient={handleRequestDeletePatient}
+                          onRemovePatientFromBox={handleDeletePatient}
+                          onUpdatePatient={handleUpdatePatient}
+                          onEditBox={(b) => setEditingBox(b)}
+                          onOpenPatientQR={(p, b) => {
+                            setQrModalPatient(p);
+                            setQrModalBox(b);
+                            setIsQRModalOpen(true);
+                          }}
+                          onAddPatient={handleAddPatient}
+                          onTransferToPeralihanSiang={handleTransferToPeralihanSiang}
+                          onTransferBackFromPeralihanSiang={handleTransferBackFromPeralihanSiang}
+                        />
                       </div>
                     );
                   })}
@@ -3271,6 +3195,7 @@ export default function App() {
         patients={patients}
       />
 
+      {/* In-App Password Protected Delete Patient Dialog */}
       <DeletePatientPasswordModal
         isOpen={!!pendingDeletePatient}
         onClose={() => setPendingDeletePatient(null)}

@@ -76,11 +76,7 @@ interface QueueBoxCardProps {
   onUpdateBoxImages?: (boxId: string, imageUrls: string[]) => void;
   onDeleteBox: (boxId: string, transferTargetBoxId?: string) => void;
   onClearBoxPatients?: (boxId: string) => void;
-  onDeletePatient: (patientId: string) => void;
-  // Melepas pasien dari kotak TANPA lewat konfirmasi password penghapusan permanen.
-  // Alasan pelepasan ikut dikirim supaya catatan kunjungannya di arsip harian bisa
-  // ditutup dengan benar - tanpa itu, timer Respon Time di terapis asal berjalan
-  // selamanya setelah pasien dipindahkan.
+  onDeletePatient: (patientId: string, endedReason?: 'dipindahkan' | 'dihapus') => void;
   onRemovePatientFromBox?: (patientId: string, endedReason?: 'dipindahkan' | 'dihapus') => void;
   onUpdatePatient?: (updatedPatient: PatientItem) => void;
   onEditBox?: (box: QueueBox) => void;
@@ -1691,7 +1687,7 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                         )}
                         {/* Auto Response Time for Completed */}
                         {(() => {
-                          const metrics = calculatePatientTimeMetrics(patient, [box], currentTimeTick, false);
+                          const metrics = calculatePatientTimeMetrics(patient, [box], currentTimeTick);
                           return (
                             <div className="mt-0.5 flex items-center gap-2 text-[10px] text-slate-500 font-mono font-medium">
                               <span>⏱️ Respon Time: {metrics.formattedResponseTime}</span>
@@ -2040,13 +2036,10 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
             onToggleCompletePatient(pid, { skipJemputan: true });
           }}
           onDeleteSourcePatient={(pid) => {
-            // Ini bukan penghapusan pasien sungguhan (datanya sudah dipindahkan ke
-            // kotak tujuan di langkah sebelumnya), jadi TIDAK boleh lewat alur
-            // onDeletePatient yang minta password - itu untuk penghapusan permanen.
             if (onRemovePatientFromBox) {
               onRemovePatientFromBox(pid, 'dipindahkan');
             } else {
-              onDeletePatient(pid);
+              onDeletePatient(pid, 'dipindahkan');
             }
           }}
         />
