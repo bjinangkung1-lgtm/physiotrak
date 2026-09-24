@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   X, Calendar, Clock, User, Stethoscope, ChevronRight, 
@@ -31,6 +31,34 @@ export const PatientTimelineModal: React.FC<PatientTimelineModalProps> = ({
   const [isEnlarged, setIsEnlarged] = useState(false);
   const [selectedDisciplineFilter, setSelectedDisciplineFilter] = useState<'all' | TherapyCategory>('all');
 
+  // Riwayat diambil dari ARSIP HARIAN lewat server, bukan dari masterPatient.visitHistory.
+  // visitHistory hanya pernah diisi di sisi klien dan tidak pernah disimpan server,
+  // sehingga ia hilang tiap kali data master disegarkan - itulah sebabnya modal ini
+  // sempat menampilkan satu baris saja padahal pasiennya sudah berkali-kali berkunjung.
+  const [riwayatServer, setRiwayatServer] = useState<PatientVisitHistoryItem[] | null>(null);
+  const [memuatRiwayat, setMemuatRiwayat] = useState(false);
+  const rmUntukRiwayat = (patient && patient.medicalRecordNo) ? String(patient.medicalRecordNo).trim() : '';
+
+  // Kait ini SENGAJA diletakkan sebelum early-return di bawah, supaya urutan kait
+  // tetap sama pada tiap render dan tidak melanggar aturan hook React.
+  useEffect(() => {
+    if (!isOpen || !rmUntukRiwayat) {
+      setRiwayatServer(null);
+      return;
+    }
+    let dibatalkan = false;
+    setMemuatRiwayat(true);
+    fetch(`/api/patient-history?rm=${encodeURIComponent(rmUntukRiwayat)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (dibatalkan) return;
+        setRiwayatServer(d && d.status === 'ok' && Array.isArray(d.visits) ? d.visits : null);
+      })
+      .catch(() => { if (!dibatalkan) setRiwayatServer(null); })
+      .finally(() => { if (!dibatalkan) setMemuatRiwayat(false); });
+    return () => { dibatalkan = true; };
+  }, [isOpen, rmUntukRiwayat]);
+
   if (!isOpen || !patient) return null;
 
   const patientName = patient.patientName || 'Pasien';
@@ -54,23 +82,21 @@ export const PatientTimelineModal: React.FC<PatientTimelineModalProps> = ({
 
   // Visit history list if available
   const rawVisitHistory: PatientVisitHistoryItem[] = useMemo(() => {
-    if (mp.visitHistory && mp.visitHistory.length > 0) {
-      return mp.visitHistory;
-    }
-    return [
-      {
-        visitNo: 1,
-        date: firstVisitDate,
-        boxId: mp.firstBoxId || pi.boxId || 'box-1',
-        boxTitle: firstBoxTitle,
-        officerName: firstOfficer,
-        actionCode: mp.defaultActionCode || pi.actionCode || 'Tindakan IRM',
-        diagnosis: mp.defaultDiagnosis || pi.diagnosis || 'Rehabilitasi Medik',
-        isRanap: pi.isRanap || false,
-        notes: 'Kedatangan / Kunjungan Awal Terapi Pasien',
-      }
-    ];
-  }, [mp.visitHistory, firstVisitDate, mp.firstBoxId, pi.boxId, firstBoxTitle, firstOfficer, mp.defaultActionCode, pi.actionCode, mp.defaultDiagnosis, pi.diagnosis, pi.isRanap]);
+    // Arsip harian lebih dipercaya: ia memuat SETIAP kunjungan yang pernah tercatat,
+    // termasuk kunjungan lama dari bulan-bulan sebelumnya.
+    if (riwayatServer && riwayatServer.length > 0) return riwayatServer;
+    // Cadangan kalau server tidak terjangkau: riwayat yang kebetulan masih ada di klien.
+    if (mp.visitHistory && mp.visitHistory.length > 0) return mp.visitHistory;
+    // JANGAN mengarang baris kunjungan di sini.
+    //
+    // Versi sebelumnya membuat satu baris palsu dari tanggal kunjungan pertama dan
+    // nama terapis pertama, lalu menempelinya diagnosa bawaan pasien. Hasilnya tampil
+    // persis seperti rekaman kunjungan sungguhan - bertanggal, bernama terapis,
+    // berdiagnosa - padahal tidak ada kejadian yang direkam di situ. Pada rekam medis
+    // itu berbahaya: petugas bisa membacanya sebagai riwayat yang benar-benar terjadi.
+    // Lebih baik kosong dan jujur.
+    return [];
+  }, [riwayatServer, mp.visitHistory]);
 
   // Filtered visit history
   const filteredVisits = useMemo(() => {
@@ -352,6 +378,19 @@ export const PatientTimelineModal: React.FC<PatientTimelineModalProps> = ({
         {/* Timeline Body (Scrollable, Wide Multi-Card View) */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1 bg-slate-50/50">
           <div className="relative pl-6 space-y-3.5 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
+            {filteredVisits.length === 0 && (
+              <div className="py-10 text-center">
+                <div className="text-sm font-semibold text-slate-500">
+                  {memuatRiwayat ? 'Memuat riwayat kunjungan...' : 'Riwayat kunjungan belum tersedia'}
+                </div>
+                {!memuatRiwayat && (
+                  <div className="text-xs text-slate-400 mt-1.5 max-w-md mx-auto">
+                    Belum ada kunjungan pasien ini yang tercatat di arsip harian
+                    {selectedDisciplineFilter !== 'all' ? ' untuk disiplin yang dipilih' : ''}.
+                  </div>
+                )}
+              </div>
+            )}
             {filteredVisits.map((v, idx) => {
               const vCategory = v.category || getTherapistCategory(v.officerName, v.boxTitle);
               const badgeInfo = getDisciplineBadgeInfo(vCategory);

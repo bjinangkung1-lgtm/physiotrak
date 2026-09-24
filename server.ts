@@ -4013,6 +4013,79 @@ app.post('/api/daily-database/batch', async (req, res) => {
 });
 
 // GET /api/monthly-report?year=YYYY&month=M
+// GET riwayat kunjungan satu pasien berdasarkan nomor rekam medis.
+//
+// SUMBERNYA ARSIP HARIAN, bukan masterPatient.visitHistory. Alasannya penting:
+// visitHistory hanya pernah diisi di sisi klien dan tidak pernah disimpan maupun
+// dikembalikan oleh server, sehingga ia hilang setiap kali data master disegarkan -
+// itulah sebabnya modal riwayat sempat tampil hanya berisi satu baris padahal
+// pasiennya sudah 7 kali berkunjung.
+//
+// Arsip harian sebaliknya memuat SETIAP kunjungan yang pernah tercatat, lengkap
+// dengan nama terapis dan kotaknya. Dengan membacanya, riwayat LAMA ikut tampil -
+// bukan hanya yang terkumpul setelah fitur ini dipasang.
+app.get('/api/patient-history', (req, res) => {
+  try {
+    const rm = typeof req.query.rm === 'string' ? req.query.rm.trim() : '';
+    if (!rm) {
+      return res.status(400).json({ status: 'error', message: 'Parameter rm wajib diisi' });
+    }
+
+    const semuaArsip = loadFullDailyArchive();
+    const terkumpul: any[] = [];
+    for (const tanggal of Object.keys(semuaArsip)) {
+      for (const v of (semuaArsip[tanggal] || [])) {
+        if (!v || String(v.medicalRecordNo || '').trim() !== rm) continue;
+        terkumpul.push({ ...v, visitDate: v.visitDate || tanggal });
+      }
+    }
+
+    // Diurutkan dari yang PALING LAMA dulu supaya penomoran kunjungan benar,
+    // baru dibalik sebelum dikirim - modal menampilkan yang terbaru di atas.
+    terkumpul.sort((a, b) => {
+      const ta = String(a.visitDate || '');
+      const tb = String(b.visitDate || '');
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      return String(a.registeredAt || '') < String(b.registeredAt || '') ? -1 : 1;
+    });
+
+    const hitungPerDisiplin = new Map<string, number>();
+    const visits = terkumpul.map((v, i) => {
+      const kategori = v.category || undefined;
+      // Nomor kunjungan per disiplin hanya dihitung kalau kategorinya memang
+      // tercatat. Kalau tidak, klien yang menurunkannya dari nama terapis -
+      // jangan mengarang nomor di sini.
+      let disciplineVisitNo: number | undefined;
+      if (kategori) {
+        const n = (hitungPerDisiplin.get(kategori) || 0) + 1;
+        hitungPerDisiplin.set(kategori, n);
+        disciplineVisitNo = n;
+      }
+      return {
+        visitNo: i + 1,
+        disciplineVisitNo,
+        category: kategori,
+        date: v.visitDate,
+        boxId: v.boxId || '',
+        boxTitle: v.boxTitle || '',
+        officerName: v.officerName || '',
+        actionCode: v.actionCode || '',
+        diagnosis: v.diagnosis || '',
+        isRanap: !!v.isRanap,
+        notes: v.note || '',
+        completedAt: v.completedAt || undefined,
+      };
+    });
+
+    visits.reverse();
+
+    res.json({ status: 'ok', medicalRecordNo: rm, totalVisits: visits.length, visits });
+  } catch (err: any) {
+    console.error('Error membaca riwayat pasien:', err);
+    res.status(500).json({ status: 'error', message: err?.message || 'Gagal membaca riwayat' });
+  }
+});
+
 app.get('/api/monthly-report', (req, res) => {
   try {
     const today = getLocalDateStringWIB();

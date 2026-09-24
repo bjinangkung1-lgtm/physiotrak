@@ -1248,9 +1248,17 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                               {patient.patientName}
                             </span>
 
-                            <span className="font-mono bg-slate-100 px-1.5 py-0.2 rounded text-slate-700 font-semibold border border-slate-200/80 text-[14px] leading-[19.5px] shrink-0">
+                            {/* Nomor RM membuka Riwayat Terapi.
+                                SENGAJA di sini, bukan pada nama pasien: nama sudah dipakai
+                                untuk "Edit Data & Tindakan" yang dipakai petugas tiap hari. */}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPatientForTimeline(patient)}
+                              title={`Klik untuk melihat Riwayat Terapi ${patient.patientName}`}
+                              className="font-mono bg-slate-100 hover:bg-teal-50 px-1.5 py-0.2 rounded text-slate-700 hover:text-teal-800 font-semibold border border-slate-200/80 hover:border-teal-300 text-[14px] leading-[19.5px] shrink-0 cursor-pointer transition-colors"
+                            >
                               RM: {patient.medicalRecordNo}
-                            </span>
+                            </button>
 
                             {/* Badge Kompak: 1st Terapis & Kunjungan K-X (Interaktif membuka Timeline) */}
                             {patient.firstOfficerName ? (
@@ -1646,9 +1654,14 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                         <span className="line-through font-semibold text-slate-600 mr-2 break-words leading-snug">
                           {patient.patientName}
                         </span>
-                        <span className="text-[10px] text-slate-500 font-mono font-medium">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPatientForTimeline(patient)}
+                          title={`Klik untuk melihat Riwayat Terapi ${patient.patientName}`}
+                          className="text-[10px] text-slate-500 hover:text-teal-700 font-mono font-medium cursor-pointer hover:underline decoration-teal-400 underline-offset-2 transition-colors"
+                        >
                           / {patient.medicalRecordNo}
-                        </span>
+                        </button>
 
                         {/* Badge 1st Terapis & Kunjungan K-X for Completed Patient */}
                         {patient.firstOfficerName ? (
