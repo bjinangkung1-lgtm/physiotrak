@@ -48,7 +48,61 @@ kunjungan yang akan datang.
 
 ---
 
-## 2. Fixture uji yang pecah saat melewati tengah malam WIB
+## 2. Rantai terapis, pencatat ceklis, dan riwayat pra-antrean
+
+**Diminta:** 25 September 2026
+**Status:** SELESAI - commit 946d588, prompt AI Studio sudah diserahkan
+**Menunggu:** penerapan di AI Studio dan publish
+
+### Yang dikerjakan
+
+1. **Rantai terapis per kunjungan.** Setiap perpindahan kotak dicatat sebagai satu
+   mata rantai. Sebelumnya pemindahan lebih dari sekali membuat terapis di tengah
+   hilang permanen.
+
+2. **Pencatat ceklis, aturan B** (ceklis yang BERTAHAN):
+   - Diceklis -> tercatat terapis kotak saat itu
+   - Dibatalkan -> catatannya ikut dihapus
+   - Diceklis lagi oleh terapis lain -> catatannya berpindah
+   - Dipindahkan SESUDAH diceklis -> catatannya tidak bergeser
+
+3. **Tombol "Riwayat"** pada laci "Cari & Ambil dari Database" di form Tambah
+   Pasien, sehingga riwayat bisa dilihat sebelum pasien diantrekan. Hanya membaca;
+   sudah diuji isian form tetap utuh setelah riwayat ditutup.
+
+### Keputusan rancangan - JANGAN diubah tanpa alasan kuat
+
+Pencatatan rantai ada di SISI SERVER, di tempat arsip harian disusun, bukan di
+alur pemindahan milik petugas. Alasannya: pemindahan dari perangkat mana pun ikut
+tercatat, dan alur kerja harian tidak tersentuh sehingga tidak bisa dirusak oleh
+perubahan ini.
+
+Konsekuensinya, `therapistChain` dan `completedBy` HARUS disebut di TIGA tempat
+pada `server.ts`: saat arsip disusun, saat kunjungan disimpan dari klien, dan pada
+endpoint riwayat. Kalau yang kedua terlewat, rantainya terhapus diam-diam setiap
+kali pasien dipindahkan.
+
+### Uji
+
+Ditulis lebih dulu terhadap kode lama: 1/11, dan satu-satunya yang lulus pun lulus
+semu. Sesudah perbaikan 11/11. Uji pra-antrean E2E 13/13.
+
+### Berlaku surut atau tidak
+
+- Berlaku surut: kunjungan lama yang terapis awalnya berbeda dari terapis akhir
+  tetap menampilkan perpindahan itu.
+- TIDAK berlaku surut: rantai penuh dan pencatat ceklis baru terkumpul sejak
+  dipasang.
+
+### Catatan untuk pengujian berikutnya
+
+Ada 26 tombol bernama "Riwayat" di halaman utama. Uji E2E yang mencari tombol
+berdasarkan teks akan menekan yang salah dan lolos semu. Targetkan lewat atribut
+`title`, bukan teks.
+
+---
+
+## 3. Fixture uji yang pecah saat melewati tengah malam WIB
 
 **Ditemukan:** 25 September 2026, dini hari
 **Status:** sudah diperbaiki di berkas uji (di luar repositori aplikasi)
