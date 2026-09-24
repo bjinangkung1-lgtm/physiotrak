@@ -8,50 +8,54 @@ supaya tidak hilang antar sesi.
 ## 1. Riwayat terapis per pasien
 
 **Diminta:** 24 September 2026
-**Status:** belum dikerjakan
+**Status:** SEBAGIAN BESAR SUDAH ADA - tinggal pemicunya
 
 ### Yang diminta
 
-Pencatatan riwayat: seorang pasien pernah dikerjakan oleh terapis siapa saja.
+Klik nama pasien -> muncul riwayat dari kunjungan pertama hingga terakhir,
+beserta terapis yang mengerjakan tiap kunjungan.
 
-### Keadaan sekarang (sudah diperiksa)
+### Yang SUDAH ada (sudah diperiksa di kode)
 
-Satu kunjungan hanya menyimpan **dua** nama terapis:
+`src/components/PatientTimelineModal.tsx` (492 baris) sudah menampilkan persis itu:
 
-| Field | Isi |
-|---|---|
-| `firstOfficerName` | terapis pertama yang menangani |
-| `officerName` | terapis terakhir yang menangani |
-| `firstBoxTitle` / `boxTitle` | kotak pertama dan kotak terakhir |
+- Daftar kunjungan berurutan waktu, terbaru di atas
+- Tiap kunjungan mencantumkan **nama terapis** (`v.officerName`), kotak terapi,
+  dan disiplinnya (fisio / okupasi / wicara)
+- Penanda **1st PJ (Terapis Awal)** per disiplin dan penanda kunjungan terakhir
+- Penyaringan per disiplin, lengkap dengan jumlah kunjungan tiap disiplin
+- Tombol "Arahkan Antrean ke terapis ini"
 
-Artinya kalau pasien berpindah kotak lebih dari sekali dalam satu kunjungan,
-**terapis di tengah tidak tercatat sama sekali** - hanya yang pertama dan yang
-terakhir yang tersimpan. Rantai perpindahannya hilang.
+Jadi riwayatnya sudah lengkap dan sudah berjalan.
 
-Antar kunjungan, datanya sebetulnya ada di arsip harian (tiap kunjungan membawa
-`officerName` dan `medicalRecordNo`), tetapi belum pernah dikumpulkan menjadi satu
-tampilan riwayat per pasien.
+### Yang KURANG - hanya satu hal
 
-### Dua lingkup yang perlu dipastikan dulu
+Modal itu **tidak terbuka dari nama pasien**. Pemicunya ada di
+`src/components/QueueBoxCard.tsx` baris 1259, 1274, 1657, 1670 - semuanya
+menempel pada lencana kecil bertuliskan `1st: <Nama>` dan `K-3`.
 
-1. **Dalam satu kunjungan** - mencatat seluruh rantai terapis saat pasien
-   berpindah kotak, bukan hanya yang pertama dan terakhir.
-   Ini butuh perubahan struktur data (menambah larik riwayat pada kunjungan).
+Lencana itu kecil dan tidak terlihat seperti sesuatu yang bisa ditekan, jadi
+wajar kalau tidak diketahui. Nama pasien sendiri belum menjadi pemicu.
 
-2. **Antar kunjungan** - menampilkan daftar "pasien ini pernah ditangani oleh
-   siapa saja, kapan" dari arsip harian yang sudah ada.
-   Ini kemungkinan besar bisa dikerjakan **tanpa mengubah struktur data**, cukup
-   membaca arsip yang sudah tersimpan - termasuk untuk data lama.
+### Pekerjaan yang perlu dilakukan
 
-Perbedaannya penting: lingkup 2 bisa langsung menampilkan riwayat lama, lingkup 1
-hanya berlaku untuk kunjungan yang akan datang.
+Membuat nama pasien ikut memanggil `setSelectedPatientForTimeline(patient)`,
+dengan tanda visual bahwa nama itu bisa ditekan.
 
-### Yang perlu ditanyakan sebelum mulai
+Perlu diperiksa saat mengerjakan:
+- Jangan sampai bentrok dengan tindakan lain yang sudah menempel pada nama
+  pasien (kalau ada) - terutama pada layar sentuh
+- Empat titik pemicu lama tetap dipertahankan, jangan dihapus
 
-- Lingkup mana yang lebih dibutuhkan lebih dulu? (atau keduanya)
-- Riwayatnya ditampilkan di mana - pada kartu pasien, pada Database Harian, atau
-  halaman tersendiri?
-- Perlu bisa diekspor/dicetak, atau cukup dilihat di layar?
+### Yang benar-benar TIDAK bisa ditampilkan
+
+Kalau pasien berpindah kotak lebih dari sekali **dalam satu kunjungan yang sama**,
+terapis di tengah tidak pernah disimpan - satu kunjungan hanya menyimpan
+`firstOfficerName` dan `officerName`. Riwayat antar kunjungan tidak terpengaruh
+oleh keterbatasan ini.
+
+Perlu ditanyakan: apakah rantai perpindahan dalam satu kunjungan juga dibutuhkan?
+Kalau ya, itu pekerjaan terpisah dan hanya berlaku untuk kunjungan ke depan.
 
 ---
 
