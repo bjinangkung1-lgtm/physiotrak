@@ -664,6 +664,18 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
+                {/* Penanda sematan. Tombol Pin sudah pindah ke menu titik tiga, jadi
+                    statusnya perlu tetap terlihat sekilas - kalau tidak, petugas harus
+                    membuka menu satu per satu untuk tahu kotak mana yang tersemat.
+                    Ini PENANDA saja, bukan tombol. */}
+                {box.isPinned && (
+                  <Pin
+                    className={`w-3.5 h-3.5 shrink-0 rotate-45 fill-amber-500 ${
+                      colorTheme.isDark ? 'text-amber-300' : 'text-amber-600'
+                    }`}
+                    aria-label="Kotak tersemat"
+                  />
+                )}
                 <h2 className={`font-bold text-sm sm:text-base leading-snug tracking-tight ${colorTheme.titleColor || 'text-slate-900'}`}>
                   {isPeralihanBox ? 'PERALIHAN SIANG' : (box.title ? box.title.split('(')[0].trim() : '')}
                 </h2>
@@ -707,229 +719,6 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
               )}
             </div>
 
-            {/* Drag Handle, Edit, Pin & Dropdown Options */}
-            <div className="flex items-center gap-1 shrink-0">
-              {onDragStartBox && (
-                <div
-                  draggable={!isDragDisabled}
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('text/plain', box.id);
-                    onDragStartBox(box.id);
-                  }}
-                  onDragEnd={() => onDragEndBox?.()}
-                  className={`p-2 sm:p-1.5 rounded-lg transition-all border select-none ${
-                    isDragDisabled
-                      ? 'opacity-30 cursor-not-allowed'
-                      : 'cursor-grab active:cursor-grabbing hover:scale-105'
-                  } ${
-                    colorTheme.isDark 
-                      ? 'text-slate-400 hover:text-white hover:bg-white/10 border-transparent' 
-                      : 'text-slate-400 hover:text-slate-800 hover:bg-black/5 border-transparent'
-                  }`}
-                  title={isDragDisabled ? 'Pencarian aktif - reset filter untuk geser posisi' : 'Tahan dan geser untuk memindahkan posisi kotak antrean'}
-                >
-                  <GripVertical className="w-4 h-4" />
-                </div>
-              )}
-
-              {onEditBox && (
-                <button
-                  onClick={() => onEditBox(box)}
-                  className={`p-2 sm:p-1.5 rounded-lg transition-all cursor-pointer border ${
-                    colorTheme.isDark 
-                      ? 'text-slate-300 hover:text-white hover:bg-white/10 border-transparent hover:border-slate-600' 
-                      : 'text-slate-500 hover:text-blue-700 hover:bg-white/80 border-transparent hover:border-slate-200/80 hover:shadow-2xs'
-                  }`}
-                  title="Edit Judul Kotak & Ruangan"
-                >
-                  <Edit3 className="w-4 h-4" />
-                </button>
-              )}
-
-              <button
-                onClick={() => onTogglePin(box.id)}
-                className={`p-2 sm:p-1.5 rounded-lg transition-all cursor-pointer ${
-                  box.isPinned 
-                    ? colorTheme.isDark
-                      ? 'text-amber-300 bg-amber-950/80 hover:bg-amber-900/90 border border-amber-600/80 shadow-2xs'
-                      : 'text-amber-700 bg-amber-100/90 hover:bg-amber-200/90 border border-amber-300/80 shadow-2xs' 
-                    : colorTheme.isDark
-                      ? 'text-slate-400 hover:text-slate-200 hover:bg-white/10 border border-transparent'
-                      : 'text-slate-400 hover:text-slate-700 hover:bg-white/80 hover:border-slate-200/80'
-                }`}
-                title={box.isPinned ? 'Lepas Sematan (Unpin)' : 'Sematkan Kotak (Pin)'}
-              >
-                <Pin className={`w-4 h-4 ${box.isPinned ? 'fill-amber-500 rotate-45' : ''}`} />
-              </button>
-
-              <div className="relative">
-                <button
-                  onClick={() => setShowMenu(!showMenu)}
-                  className={`p-2 sm:p-1.5 rounded-lg transition-all cursor-pointer ${
-                    colorTheme.isDark
-                      ? 'text-slate-300 hover:text-white hover:bg-white/10'
-                      : 'text-slate-500 hover:text-slate-800 hover:bg-white/80 hover:border-slate-200/80'
-                  }`}
-                >
-                  <MoreVertical className="w-4 h-4" />
-                </button>
-
-                {showMenu && (
-                  <div className="absolute right-0 top-8 z-30 w-52 bg-white rounded-xl shadow-xl border border-slate-200 py-1 text-xs animate-in fade-in zoom-in-95">
-                    {onEditBox && (
-                      <button
-                        onClick={() => {
-                          onEditBox(box);
-                          setShowMenu(false);
-                        }}
-                        className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 text-blue-700 font-bold cursor-pointer"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        <span>Edit Judul Kotak & Ruangan</span>
-                      </button>
-                    )}
-
-                    <button
-                      onClick={() => {
-                        setShowColorPicker(!showColorPicker);
-                        setShowMenu(false);
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer"
-                    >
-                      <Palette className="w-3.5 h-3.5 text-teal-600" />
-                      <span>Ubah Warna Kotak</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        onViewHistory(box);
-                        setShowMenu(false);
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer"
-                    >
-                      <History className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>Lihat Riwayat Panggilan</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setGalleryInitialIndex(0);
-                        setGalleryInitialTab('manage');
-                        setGalleryModalOpen(true);
-                        setShowMenu(false);
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer"
-                    >
-                      <ImageIcon className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Kelola Foto Instruksi / SOP</span>
-                    </button>
-
-                    {canShowAlihkanSiang && (
-                      <button
-                        onClick={() => {
-                          setShowMenu(false);
-                          handleDirectAlihkanSiang();
-                        }}
-                        className="w-full text-left px-3 py-2 hover:bg-amber-50 flex items-center gap-2 text-amber-800 font-bold cursor-pointer"
-                      >
-                        <Sun className="w-3.5 h-3.5 text-amber-600" />
-                        <span>ALIHKAN SIANG {activePatients.length > 0 ? `(${activePatients.length})` : ''}</span>
-                      </button>
-                    )}
-
-                    {isPeralihanBox && (
-                      <button
-                        onClick={() => {
-                          setShowMenu(false);
-                          if (activePatients.length === 0) {
-                            alert('Tidak ada pasien yang sedang mengantre di kotak PERALIHAN SIANG untuk dialihkan kembali.');
-                            return;
-                          }
-                          setShowAlihkanKembaliModal(true);
-                        }}
-                        className="w-full text-left px-3 py-2 hover:bg-teal-50 flex items-center gap-2 text-teal-800 font-bold cursor-pointer"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5 text-teal-600" />
-                        <span>ALIHKAN KEMBALI {activePatients.length > 0 ? `(${activePatients.length})` : ''}</span>
-                      </button>
-                    )}
-
-                    {/* Posisi & Urutan Kotak */}
-                    {onMoveBoxStep && !isDragDisabled && (
-                      <>
-                        <div className="border-t border-slate-100 my-1" />
-                        <div className="px-3 py-1 text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
-                          Urutan Posisi Kotak
-                        </div>
-                        <button
-                          onClick={() => {
-                            onMoveBoxStep(box.id, 'left');
-                            setShowMenu(false);
-                          }}
-                          className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer font-medium"
-                        >
-                          <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Geser Maju (Kiri/Atas)</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            onMoveBoxStep(box.id, 'right');
-                            setShowMenu(false);
-                          }}
-                          className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer font-medium"
-                        >
-                          <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Geser Mundur (Kanan/Bawah)</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            onMoveBoxStep(box.id, 'first');
-                            setShowMenu(false);
-                          }}
-                          className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer font-medium"
-                        >
-                          <ArrowUpToLine className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Pindah ke Paling Depan</span>
-                        </button>
-                      </>
-                    )}
-
-                    <div className="border-t border-slate-100 my-1" />
-
-                    {onClearBoxPatients && (
-                      <button
-                        onClick={() => {
-                          setShowClearPatientsConfirm(true);
-                          setShowMenu(false);
-                        }}
-                        className="w-full text-left px-3 py-1.5 hover:bg-amber-50 text-amber-700 flex items-center gap-2 cursor-pointer font-medium"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Kosongkan Pasien Kotak Ini</span>
-                      </button>
-                    )}
-
-                    {isPeralihanBox ? (
-                      <div className="px-3 py-2 text-slate-400 flex items-center gap-2 text-[11px] font-medium bg-slate-50">
-                        <Lock className="w-3.5 h-3.5 text-slate-400" />
-                        <span>Kotak Sistem (Tidak Bisa Dihapus)</span>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setShowDeleteConfirm(true);
-                          setShowMenu(false);
-                        }}
-                        className="w-full text-left px-3 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-medium"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Hapus Kotak</span>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
           </div>
 
           {/* Color Picker Palette Panel */}
@@ -1800,7 +1589,7 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
           </button>
 
           {/* ALIHKAN SIANG BUTTON - EKSEKUSI LANGSUNG */}
-          {canShowAlihkanSiang && (
+          {canShowAlihkanSiang && activePatients.length > 0 && (
             <button
               type="button"
               onClick={handleDirectAlihkanSiang}
@@ -1842,19 +1631,186 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => onViewHistory(box)}
-            className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-all cursor-pointer ${
-              colorTheme.isDark 
-                ? 'text-slate-300 hover:text-cyan-300 hover:bg-white/10' 
-                : 'text-slate-600 hover:text-indigo-700 hover:bg-black/5'
-            }`}
-            title="Riwayat Panggilan Kotak Ini"
-          >
-            <History className={`w-3.5 h-3.5 ${colorTheme.isDark ? 'text-cyan-400' : 'text-indigo-600'}`} />
-            <span className="hidden sm:inline">Riwayat</span>
-          </button>
+        <div className="flex items-center gap-1.5 ml-auto shrink-0">
+              <div className="relative">
+                <button
+                  onClick={() => setShowMenu(!showMenu)}
+                  title="Menu Kotak"
+                  className={`p-2 sm:p-1.5 rounded-lg transition-all cursor-pointer ${
+                    colorTheme.isDark
+                      ? 'text-slate-300 hover:text-white hover:bg-white/10'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-white/80 hover:border-slate-200/80'
+                  }`}
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </button>
+
+                {showMenu && (
+                  <div className="absolute right-0 bottom-full mb-2 z-30 w-52 max-h-[70vh] overflow-y-auto bg-white rounded-xl shadow-xl border border-slate-200 py-1 text-xs animate-in fade-in zoom-in-95">
+                    <button
+                      onClick={() => {
+                        onTogglePin(box.id);
+                        setShowMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-amber-50 flex items-center gap-2 text-amber-800 font-bold cursor-pointer"
+                    >
+                      <Pin className={`w-3.5 h-3.5 ${box.isPinned ? 'fill-amber-500 rotate-45' : ''}`} />
+                      <span>{box.isPinned ? 'Lepas Sematan' : 'Sematkan Kotak'}</span>
+                    </button>
+
+                    {onEditBox && (
+                      <button
+                        onClick={() => {
+                          onEditBox(box);
+                          setShowMenu(false);
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 text-blue-700 font-bold cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Edit Judul Kotak & Ruangan</span>
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setShowColorPicker(!showColorPicker);
+                        setShowMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer"
+                    >
+                      <Palette className="w-3.5 h-3.5 text-teal-600" />
+                      <span>Ubah Warna Kotak</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        onViewHistory(box);
+                        setShowMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer"
+                    >
+                      <History className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Lihat Riwayat Panggilan</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setGalleryInitialIndex(0);
+                        setGalleryInitialTab('manage');
+                        setGalleryModalOpen(true);
+                        setShowMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Kelola Foto Instruksi / SOP</span>
+                    </button>
+
+                    {canShowAlihkanSiang && (
+                      <button
+                        onClick={() => {
+                          setShowMenu(false);
+                          handleDirectAlihkanSiang();
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-amber-50 flex items-center gap-2 text-amber-800 font-bold cursor-pointer"
+                      >
+                        <Sun className="w-3.5 h-3.5 text-amber-600" />
+                        <span>ALIHKAN SIANG {activePatients.length > 0 ? `(${activePatients.length})` : ''}</span>
+                      </button>
+                    )}
+
+                    {isPeralihanBox && (
+                      <button
+                        onClick={() => {
+                          setShowMenu(false);
+                          if (activePatients.length === 0) {
+                            alert('Tidak ada pasien yang sedang mengantre di kotak PERALIHAN SIANG untuk dialihkan kembali.');
+                            return;
+                          }
+                          setShowAlihkanKembaliModal(true);
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-teal-50 flex items-center gap-2 text-teal-800 font-bold cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-teal-600" />
+                        <span>ALIHKAN KEMBALI {activePatients.length > 0 ? `(${activePatients.length})` : ''}</span>
+                      </button>
+                    )}
+
+                    {/* Posisi & Urutan Kotak */}
+                    {onMoveBoxStep && !isDragDisabled && (
+                      <>
+                        <div className="border-t border-slate-100 my-1" />
+                        <div className="px-3 py-1 text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                          Urutan Posisi Kotak
+                        </div>
+                        <button
+                          onClick={() => {
+                            onMoveBoxStep(box.id, 'left');
+                            setShowMenu(false);
+                          }}
+                          className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer font-medium"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Geser Maju (Kiri/Atas)</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            onMoveBoxStep(box.id, 'right');
+                            setShowMenu(false);
+                          }}
+                          className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer font-medium"
+                        >
+                          <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Geser Mundur (Kanan/Bawah)</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            onMoveBoxStep(box.id, 'first');
+                            setShowMenu(false);
+                          }}
+                          className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700 cursor-pointer font-medium"
+                        >
+                          <ArrowUpToLine className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Pindah ke Paling Depan</span>
+                        </button>
+                      </>
+                    )}
+
+                    <div className="border-t border-slate-100 my-1" />
+
+                    {onClearBoxPatients && (
+                      <button
+                        onClick={() => {
+                          setShowClearPatientsConfirm(true);
+                          setShowMenu(false);
+                        }}
+                        className="w-full text-left px-3 py-1.5 hover:bg-amber-50 text-amber-700 flex items-center gap-2 cursor-pointer font-medium"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Kosongkan Pasien Kotak Ini</span>
+                      </button>
+                    )}
+
+                    {isPeralihanBox ? (
+                      <div className="px-3 py-2 text-slate-400 flex items-center gap-2 text-[11px] font-medium bg-slate-50">
+                        <Lock className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Kotak Sistem (Tidak Bisa Dihapus)</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setShowDeleteConfirm(true);
+                          setShowMenu(false);
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-medium"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Hapus Kotak</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
         </div>
       </div>
 
