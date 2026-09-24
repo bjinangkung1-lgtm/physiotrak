@@ -102,7 +102,59 @@ berdasarkan teks akan menekan yang salah dan lolos semu. Targetkan lewat atribut
 
 ---
 
-## 3. Fixture uji yang pecah saat melewati tengah malam WIB
+## 3. Kartu kotak antrean lebih bersih
+
+**Diminta:** 25 September 2026
+**Status:** SELESAI - commit 6c8c0a3, prompt AI Studio sudah diserahkan
+**Menunggu:** penerapan di AI Studio dan publish
+
+### Yang dikerjakan
+
+Baris judul dikosongkan dari seluruh tombol; semua perintah dikumpulkan ke menu
+titik tiga yang dipindah ke pojok kanan bawah kartu. Pegangan geser dibuang atas
+persetujuan pemakai - urutan kotak tetap bisa diatur lewat Geser Maju / Geser
+Mundur / Pindah ke Paling Depan di dalam menu.
+
+Pin ikut masuk ke menu, dan sebagai gantinya penanda sematan ditampilkan di
+sebelah nama kotak. ALIHKAN SIANG hanya muncul kalau kotaknya berisi pasien.
+
+### Tiga jebakan yang ditemukan saat mengerjakan
+
+1. Menu HARUS membuka ke atas (`bottom-full`). Tombolnya di kaki kartu, jadi menu
+   yang membuka ke bawah menjulur keluar kartu dan menimpa kotak di bawahnya.
+2. Tinggi menu dibatasi `max-h-[70vh] overflow-y-auto`. Sembilan baris menu bisa
+   lebih tinggi daripada ruang di atas tombolnya.
+3. Tombol menu perlu `ml-auto shrink-0`, kalau tidak ia turun ke baris sendiri dan
+   menempel kiri pada kartu yang tombolnya banyak.
+
+### Keputusan: hover TIDAK dipakai
+
+Ditanyakan pemakai, lalu ditolak dengan alasan teknis. Di layar sentuh hover
+ditirukan peramban: ketukan pertama hanya memunculkan tombol, ketukan kedua baru
+menekannya - kontrol satu ketukan berubah jadi dua, dan status hover tiruannya
+sering menempel. Menu titik tiga bekerja sama persis di mouse maupun sentuh.
+
+Kalau suatu saat tetap diinginkan, cara amannya lewat
+`@media (hover: hover) and (pointer: fine)` sehingga perangkat sentuh tidak ikut
+terpengaruh sama sekali.
+
+### Uji
+
+Uji kerapian ditulis lebih dulu: 0/6 terhadap tampilan lama, 12/12 sesudahnya.
+Diperiksa juga lewat tangkapan layar, sebab untuk perubahan tampilan angka uji
+saja tidak cukup.
+
+### Catatan untuk pengujian berikutnya
+
+- Label tombol yang berubah menurut keadaan (Sematkan / Lepas Sematan) jangan
+  diuji dengan satu teks saja.
+- Jangan membandingkan jumlah penanda di kartu dengan jumlah label di menu - menu
+  kotak lain belum terbuka sehingga labelnya memang belum ada di halaman.
+  Bandingkan dengan keadaan di server.
+
+---
+
+## 4. Fixture uji yang pecah saat melewati tengah malam WIB
 
 **Ditemukan:** 25 September 2026, dini hari
 **Status:** sudah diperbaiki di berkas uji (di luar repositori aplikasi)
