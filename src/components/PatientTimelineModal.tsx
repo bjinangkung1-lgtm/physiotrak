@@ -470,6 +470,58 @@ export const PatientTimelineModal: React.FC<PatientTimelineModalProps> = ({
                       )}
                     </div>
 
+                    {/* Rantai terapis dalam kunjungan ini.
+                        Ditampilkan hanya kalau pasien memang BERPINDAH - kalau hanya satu
+                        terapis, barisnya mubazir dan justru memenuhi layar. */}
+                    {(() => {
+                      const rantai = Array.isArray(v.therapistChain) ? v.therapistChain : [];
+                      // Kunjungan LAMA belum punya rantai; kalau terapis awalnya berbeda
+                      // dari terapis akhir, itu sudah cukup membuktikan ada pemindahan.
+                      const rantaiTampil = rantai.length > 0
+                        ? rantai
+                        : ((v.firstOfficerName && v.firstOfficerName !== v.officerName)
+                            ? [{ officerName: v.firstOfficerName, boxTitle: v.firstBoxTitle },
+                               { officerName: v.officerName, boxTitle: v.boxTitle }]
+                            : []);
+                      if (rantaiTampil.length < 2) return null;
+                      return (
+                        <div className="mt-2.5 text-xs bg-sky-50/70 border border-sky-200/80 rounded-xl p-2.5">
+                          <div className="text-[10px] uppercase font-bold text-sky-700/80 mb-1.5">
+                            Dikerjakan berurutan oleh:
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {rantaiTampil.map((t, i) => {
+                              const penceklis = !!v.completedBy && t.officerName === v.completedBy;
+                              return (
+                                <React.Fragment key={i}>
+                                  {i > 0 && <span className="text-sky-400 font-bold">&rarr;</span>}
+                                  <span className={`px-2 py-0.5 rounded-md border font-bold ${
+                                    penceklis
+                                      ? 'bg-emerald-100 border-emerald-300 text-emerald-900'
+                                      : 'bg-white border-sky-200 text-slate-700'
+                                  }`}>
+                                    <span className="text-[10px] text-slate-400 mr-1">{i + 1}.</span>
+                                    {t.officerName || 'Terapis'}
+                                    {t.boxTitle ? (
+                                      <span className="text-[10px] font-semibold text-slate-500 ml-1">
+                                        ({String(t.boxTitle).split('(')[0].trim()})
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </React.Fragment>
+                              );
+                            })}
+                          </div>
+                          {v.completedBy && (
+                            <div className="text-[10px] text-emerald-800 font-semibold mt-1.5">
+                              &#10003; Diceklis oleh {v.completedBy}
+                              {v.completedByBoxTitle ? ` (${String(v.completedByBoxTitle).split('(')[0].trim()})` : ''}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     {/* Diagnosis / Notes Details */}
                     {(v.diagnosis || v.notes) && (
                       <div className="mt-3 text-xs text-slate-700 bg-slate-50/90 p-2.5 rounded-xl border border-slate-200/80 grid grid-cols-1 sm:grid-cols-2 gap-2">

@@ -997,6 +997,74 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
   // ditulis ke berkas tanggalnya sendiri. Dulu semuanya dipaksa ke tanggal hari ini,
   // sehingga pasien yang melewati tengah malam tercatat dua kali (lihat tanggalKunjungan).
   const stateSekarang = loadStateFromFile();
+// RANTAI TERAPIS dalam SATU kunjungan.
+//
+// Sebelumnya satu kunjungan hanya menyimpan terapis AWAL dan terapis AKHIR, sehingga
+// begitu pasien dipindahkan lebih dari sekali, terapis di tengah hilang permanen -
+// tidak pernah ditulis ke mana pun.
+//
+// Rantai ini dicatat di SISI SERVER, di tempat arsip harian disusun, BUKAN di alur
+// pemindahan milik petugas. Dua alasannya: (1) setiap penyelarasan keadaan lewat sini,
+// jadi pemindahan dari perangkat mana pun ikut tercatat; (2) alur kerja harian petugas
+// tidak tersentuh sama sekali, sehingga perubahan ini tidak bisa merusaknya.
+function susunRantaiTerapis(prev: any, p: any, boxMatch: any): any[] {
+  const rantai: any[] = Array.isArray(prev.therapistChain) ? [...prev.therapistChain] : [];
+
+  // Kunjungan LAMA belum punya rantai. Dibangunkan dari firstOfficerName yang memang
+  // sudah tersimpan sejak dulu, supaya riwayat lama tidak tampil kosong.
+  if (rantai.length === 0) {
+    const namaAwal = prev.firstOfficerName || p.firstOfficerName || '';
+    if (namaAwal) {
+      rantai.push({
+        officerName: namaAwal,
+        boxTitle: prev.firstBoxTitle || p.firstBoxTitle || '',
+        boxId: '',
+        category: '',
+        at: prev.registeredAt || p.registeredAt || p.createdAt || '',
+      });
+    }
+  }
+
+  const nama = p.officerName || prev.officerName || boxMatch?.officerName || '';
+  if (!nama) return rantai;
+  const kotak = p.boxTitle || prev.boxTitle || boxMatch?.title || '';
+
+  // Hanya dicatat kalau memang BERPINDAH. Penyelarasan berulang pada kotak yang sama
+  // terjadi terus-menerus, dan tidak boleh menggandakan baris rantai.
+  const terakhir = rantai[rantai.length - 1];
+  if (terakhir && terakhir.officerName === nama && (terakhir.boxTitle || '') === (kotak || '')) {
+    return rantai;
+  }
+
+  rantai.push({
+    officerName: nama,
+    boxTitle: kotak,
+    boxId: p.boxId || prev.boxId || '',
+    category: p.category || boxMatch?.category || '',
+    at: new Date().toISOString(),
+  });
+  return rantai.slice(-20);
+}
+
+// SIAPA YANG MENCEKLIS - aturan B: yang berlaku adalah ceklis yang BERTAHAN.
+//
+// Ceklis dibatalkan -> catatannya ikut dihapus. Diceklis lagi oleh terapis lain ->
+// yang tercatat terapis yang baru. Alasannya: pembatalan ceklis berarti pekerjaannya
+// dianggap belum selesai, jadi kredit pekerjaannya ikut pindah.
+//
+// Selama ceklisnya masih bertahan, pemindahan pasien SESUDAHNYA tidak menggeser
+// catatan ini - yang menyatakan selesai tetap orang yang sama.
+function tentukanPenceklis(prev: any, p: any, boxMatch: any): { completedBy: string; completedByBoxTitle: string } {
+  if (!p.completed) return { completedBy: '', completedByBoxTitle: '' };
+  if (prev.completed && prev.completedBy) {
+    return { completedBy: prev.completedBy, completedByBoxTitle: prev.completedByBoxTitle || '' };
+  }
+  return {
+    completedBy: p.officerName || prev.officerName || boxMatch?.officerName || '',
+    completedByBoxTitle: p.boxTitle || prev.boxTitle || boxMatch?.title || '',
+  };
+}
+
   const currentBoxes = (boxes && Array.isArray(boxes))
     ? boxes
     : ((stateSekarang && Array.isArray(stateSekarang.boxes)) ? stateSekarang.boxes : []);
@@ -1043,6 +1111,8 @@ function syncPatientsToMasterAndArchive(patients: any[], boxes?: any[]) {
       category: p.category || prev.category || boxMatch?.category || '',
       firstOfficerName: p.firstOfficerName || prev.firstOfficerName || '',
       firstBoxTitle: p.firstBoxTitle || prev.firstBoxTitle || '',
+      therapistChain: susunRantaiTerapis(prev, p, boxMatch),
+      ...tentukanPenceklis(prev, p, boxMatch),
       queueNumber: p.queueNumber || prev.queueNumber || '',
       actionCode: p.actionCode || prev.actionCode || '',
       diagnosis: p.diagnosis || prev.diagnosis || '',
@@ -3909,6 +3979,12 @@ app.post('/api/daily-database/visit', async (req, res) => {
         category: visit.category || prev.category || boxMatch?.category || '',
         firstOfficerName: visit.firstOfficerName || prev.firstOfficerName || '',
         firstBoxTitle: visit.firstBoxTitle || prev.firstBoxTitle || '',
+        // Rantai terapis dan pencatat ceklis disusun di sisi server. Objek ini dibangun
+        // field-per-field, jadi keduanya HARUS disebut - kalau tidak, penyimpanan dari
+        // klien (yang terjadi setiap kali pasien dipindahkan) akan menghapusnya diam-diam.
+        therapistChain: Array.isArray(visit.therapistChain) ? visit.therapistChain : (prev.therapistChain || []),
+        completedBy: visit.completedBy !== undefined ? visit.completedBy : (prev.completedBy || ''),
+        completedByBoxTitle: visit.completedByBoxTitle !== undefined ? visit.completedByBoxTitle : (prev.completedByBoxTitle || ''),
         queueNumber: visit.queueNumber || prev.queueNumber || '',
         actionCode: visit.actionCode || prev.actionCode || '',
         diagnosis: visit.diagnosis || prev.diagnosis || '',
@@ -4074,6 +4150,13 @@ app.get('/api/patient-history', (req, res) => {
         isRanap: !!v.isRanap,
         notes: v.note || '',
         completedAt: v.completedAt || undefined,
+        // Terapis awal ikut dibawa: pada kunjungan LAMA hanya inilah jejak pemindahan
+        // yang tersimpan, dan tanpa ini riwayatnya hanya menampilkan terapis terakhir.
+        firstOfficerName: v.firstOfficerName || '',
+        firstBoxTitle: v.firstBoxTitle || '',
+        therapistChain: Array.isArray(v.therapistChain) ? v.therapistChain : [],
+        completedBy: v.completedBy || '',
+        completedByBoxTitle: v.completedByBoxTitle || '',
       };
     });
 

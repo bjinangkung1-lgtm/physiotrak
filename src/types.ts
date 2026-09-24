@@ -66,6 +66,14 @@ export interface PatientVisitHistoryItem {
   isRanap?: boolean;
   notes?: string;
   completedAt?: string;
+  // Terapis awal kunjungan ini (dipakai untuk kunjungan lama yang belum punya rantai).
+  firstOfficerName?: string;
+  firstBoxTitle?: string;
+  // Rantai terapis dalam SATU kunjungan, berurutan dari yang pertama menangani.
+  therapistChain?: { officerName: string; boxTitle?: string; boxId?: string; category?: string; at?: string }[];
+  // Terapis yang ceklisnya BERTAHAN (aturan B). Kosong kalau ceklisnya dibatalkan.
+  completedBy?: string;
+  completedByBoxTitle?: string;
 }
 
 export interface MasterPatient {

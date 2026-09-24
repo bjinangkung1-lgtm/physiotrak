@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { QueueBox, PatientItem, MasterPatient, PatientInstructionPhoto } from '../types';
 import { databaseService } from '../utils/databaseService';
+import { PatientTimelineModal } from './PatientTimelineModal';
 import { IcfDiagnosisInput } from './IcfDiagnosisInput';
 import { appendActionCode } from '../utils/actionCodeUtils';
 import { getPatientImageUrls, uploadPatientInstructionPhotos, processImageFile, handleImageErrorWithCloudFallback } from '../utils/imageUtils';
@@ -59,6 +60,9 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
   const [matchingPatients, setMatchingPatients] = useState<MasterPatient[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedMasterPatient, setSelectedMasterPatient] = useState<MasterPatient | null>(null);
+  // Pasien yang riwayatnya sedang dilihat SEBELUM diantrekan. Sengaja terpisah dari
+  // selectedMasterPatient supaya melihat riwayat TIDAK mengubah isian form apa pun.
+  const [riwayatPasien, setRiwayatPasien] = useState<MasterPatient | null>(null);
 
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -396,13 +400,25 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
                         {mp.defaultDiagnosis || 'Poli Fisioterapi IRM'} {mp.phoneNumber ? `• 📞 ${mp.phoneNumber}` : ''}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectMasterPatient(mp)}
-                      className="px-2.5 py-1 bg-teal-700 hover:bg-teal-800 text-white rounded-md text-[11px] font-bold shrink-0 transition-all cursor-pointer shadow-2xs"
-                    >
-                      Pilih Pasien
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Melihat riwayat SEBELUM pasien diantrekan. Hanya membaca -
+                          tidak menyentuh isian form sama sekali. */}
+                      <button
+                        type="button"
+                        onClick={() => setRiwayatPasien(mp)}
+                        title={`Lihat riwayat terapi ${mp.patientName} sebelum diantrekan`}
+                        className="px-2.5 py-1 bg-white hover:bg-sky-50 text-sky-800 border border-sky-300 hover:border-sky-400 rounded-md text-[11px] font-bold transition-all cursor-pointer shadow-2xs"
+                      >
+                        Riwayat
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectMasterPatient(mp)}
+                        className="px-2.5 py-1 bg-teal-700 hover:bg-teal-800 text-white rounded-md text-[11px] font-bold transition-all cursor-pointer shadow-2xs"
+                      >
+                        Pilih Pasien
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -948,6 +964,18 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
             isRanap: isRanap,
           }}
           canUpload={false}
+        />
+      )}
+
+      {/* Riwayat Terapi pasien, dibuka SEBELUM pasien diantrekan.
+          Menutupnya tidak mengubah apa pun pada form - isian yang sudah diketik
+          petugas tetap utuh. */}
+      {riwayatPasien && (
+        <PatientTimelineModal
+          isOpen={!!riwayatPasien}
+          onClose={() => setRiwayatPasien(null)}
+          patient={riwayatPasien}
+          boxes={boxes}
         />
       )}
     </div>
