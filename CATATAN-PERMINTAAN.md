@@ -154,7 +154,56 @@ saja tidak cukup.
 
 ---
 
-## 4. Fixture uji yang pecah saat melewati tengah malam WIB
+## 4. Menu kotak terpotong batas kartu
+
+**Ditemukan:** 25 September 2026 pagi, oleh pemakai setelah publish
+**Status:** SUDAH DIPERBAIKI - commit c4a0ff0, prompt AI Studio sudah diserahkan
+
+### Cacatnya
+
+Elemen akar kartu kotak antrean memakai `overflow-hidden`. Setelah tombol menu
+dipindah ke kaki kartu dan menunya dibuat membuka ke atas, menu itu terpotong oleh
+batas kartu. Pada kotak KOSONG - kartu terpendek - tiga baris teratasnya hilang
+sama sekali: Sematkan Kotak, Edit Judul Kotak, Ubah Warna Kotak.
+
+`max-height` dan `overflow-y-auto` pada menunya TIDAK menolong. Yang memotong bukan
+tinggi menu, melainkan batas kartu di luarnya.
+
+### Perbaikannya
+
+Menu digambar lewat `createPortal` ke `document.body` sehingga lepas dari overflow
+kartu, lalu diposisikan `fixed` mengikuti letak tombol. Arah bukaan memilih sisi
+yang ruangnya lebih lega; tinggi maksimum mengikuti ruang yang tersedia.
+
+Karena menu tidak lagi berada di dalam kartu, penutupnya dipasang sendiri: tekan di
+luar menu, gulir halaman, atau ubah ukuran jendela.
+
+JANGAN diganti dengan membuang `overflow-hidden` dari kartu - itu yang menjaga sudut
+membulat dan tata letak kartu.
+
+### PELAJARAN PENTING TENTANG PENGUJIAN
+
+Uji tata letak sebelumnya LOLOS padahal layarnya rusak, sebab ia hanya memeriksa
+teks menu ADA di DOM. **Teks yang terpotong tetap ada di DOM.**
+
+Untuk apa pun yang menyangkut tampilan, periksa apakah elemennya BENAR-BENAR
+TERLIHAT, bukan sekadar ada:
+
+    const r = el.getBoundingClientRect();
+    const atasnya = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2);
+    const terlihat = atasnya === el || el.contains(atasnya);
+
+Cara ini menangkap pemotongan oleh `overflow` induk, elemen yang tertutup elemen
+lain, dan elemen yang keluar layar - tiga hal yang tidak terdeteksi oleh pemeriksaan
+teks maupun oleh `isVisible()` biasa.
+
+Gejalanya SEMPAT TERLIHAT pada tangkapan layar pemeriksaan, tetapi salah dinilai
+sebagai potongan tangkapan layar. Kalau ada yang tampak terpotong di tangkapan
+layar, periksa sungguh-sungguh - jangan dianggap artefak.
+
+---
+
+## 5. Fixture uji yang pecah saat melewati tengah malam WIB
 
 **Ditemukan:** 25 September 2026, dini hari
 **Status:** sudah diperbaiki di berkas uji (di luar repositori aplikasi)
