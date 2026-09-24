@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Pin, 
   ChevronDown, 
@@ -486,6 +487,65 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
   const [showClearPatientsConfirm, setShowClearPatientsConfirm] = useState(false);
   const [selectedPatientForPhoto, setSelectedPatientForPhoto] = useState<PatientItem | null>(null);
   const [selectedPatientForTimeline, setSelectedPatientForTimeline] = useState<PatientItem | null>(null);
+
+  // Menu kotak DIGAMBAR LEWAT PORTAL ke document.body, bukan di dalam kartu.
+  //
+  // Kartu punya overflow-hidden, jadi menu yang membuka ke atas dari kaki kartu
+  // TERPOTONG oleh batas kartu - baris teratasnya (Sematkan Kotak, Edit Judul,
+  // Ubah Warna) hilang sama sekali pada kotak yang pendek. Portal membuat menu
+  // lepas dari pemotongan itu, lalu diposisikan mengikuti letak tombolnya.
+  const tombolMenuRef = useRef<HTMLButtonElement>(null);
+  const kotakMenuRef = useRef<HTMLDivElement>(null);
+  const [posisiMenu, setPosisiMenu] = useState<{ keAtas: boolean; kanan: number; atas: number; bawah: number; tinggi: number }>(
+    { keAtas: true, kanan: 0, atas: 0, bawah: 0, tinggi: 400 }
+  );
+
+  const hitungPosisiMenu = () => {
+    const el = tombolMenuRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const ruangAtas = r.top;
+    const ruangBawah = window.innerHeight - r.bottom;
+    // Dibuka ke sisi yang ruangnya lebih lega - biasanya ke atas, sebab tombolnya
+    // berada di kaki kartu.
+    const keAtas = ruangAtas >= ruangBawah;
+    setPosisiMenu({
+      keAtas,
+      kanan: Math.max(8, window.innerWidth - r.right),
+      atas: r.bottom + 8,
+      bawah: window.innerHeight - r.top + 8,
+      tinggi: Math.max(160, (keAtas ? ruangAtas : ruangBawah) - 16),
+    });
+  };
+
+  const bukaTutupMenu = () => {
+    if (!showMenu) hitungPosisiMenu();
+    setShowMenu((v) => !v);
+  };
+
+  // Menu di portal tidak ikut tertutup sendiri saat pengguna menekan di tempat lain,
+  // jadi penutupnya dipasang di sini. Ikut ditutup saat halaman digulir atau diubah
+  // ukurannya, sebab posisinya dihitung sekali saat dibuka.
+  useEffect(() => {
+    if (!showMenu) return;
+    const diLuar = (e: Event) => {
+      const t = e.target as Node;
+      if (kotakMenuRef.current && kotakMenuRef.current.contains(t)) return;
+      if (tombolMenuRef.current && tombolMenuRef.current.contains(t)) return;
+      setShowMenu(false);
+    };
+    const tutup = () => setShowMenu(false);
+    document.addEventListener('mousedown', diLuar);
+    document.addEventListener('touchstart', diLuar);
+    window.addEventListener('scroll', tutup, true);
+    window.addEventListener('resize', tutup);
+    return () => {
+      document.removeEventListener('mousedown', diLuar);
+      document.removeEventListener('touchstart', diLuar);
+      window.removeEventListener('scroll', tutup, true);
+      window.removeEventListener('resize', tutup);
+    };
+  }, [showMenu]);
 
   // Identify special boxes that should not have "ALIHKAN SIANG" button
   const isPeralihanBox = box.id === 'box-peralihan-siang' || box.title.toUpperCase().includes('PERALIHAN SIANG');
@@ -1634,7 +1694,8 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
         <div className="flex items-center gap-1.5 ml-auto shrink-0">
               <div className="relative">
                 <button
-                  onClick={() => setShowMenu(!showMenu)}
+                  ref={tombolMenuRef}
+                  onClick={bukaTutupMenu}
                   title="Menu Kotak"
                   className={`p-2 sm:p-1.5 rounded-lg transition-all cursor-pointer ${
                     colorTheme.isDark
@@ -1645,8 +1706,17 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                   <MoreVertical className="w-4 h-4" />
                 </button>
 
-                {showMenu && (
-                  <div className="absolute right-0 bottom-full mb-2 z-30 w-52 max-h-[70vh] overflow-y-auto bg-white rounded-xl shadow-xl border border-slate-200 py-1 text-xs animate-in fade-in zoom-in-95">
+                {showMenu && createPortal(
+                  <div
+                    ref={kotakMenuRef}
+                    style={{
+                      position: 'fixed',
+                      right: posisiMenu.kanan,
+                      ...(posisiMenu.keAtas ? { bottom: posisiMenu.bawah } : { top: posisiMenu.atas }),
+                      maxHeight: posisiMenu.tinggi,
+                    }}
+                    className="z-[60] w-52 overflow-y-auto bg-white rounded-xl shadow-xl border border-slate-200 py-1 text-xs animate-in fade-in zoom-in-95"
+                  >
                     <button
                       onClick={() => {
                         onTogglePin(box.id);
@@ -1808,7 +1878,8 @@ export const QueueBoxCard: React.FC<QueueBoxCardProps> = ({
                         <span>Hapus Kotak</span>
                       </button>
                     )}
-                  </div>
+                  </div>,
+                  document.body
                 )}
               </div>
         </div>
