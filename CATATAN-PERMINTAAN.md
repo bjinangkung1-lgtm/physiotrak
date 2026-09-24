@@ -8,54 +8,71 @@ supaya tidak hilang antar sesi.
 ## 1. Riwayat terapis per pasien
 
 **Diminta:** 24 September 2026
-**Status:** SEBAGIAN BESAR SUDAH ADA - tinggal pemicunya
+**Status:** tampilannya sudah ada, DATANYA yang tidak sampai
+**Bukti:** pasien RM 283139 - header "Total Kunjungan: 7x", tetapi daftar
+riwayatnya hanya menampilkan 1 baris
 
 ### Yang diminta
 
-Klik nama pasien -> muncul riwayat dari kunjungan pertama hingga terakhir,
-beserta terapis yang mengerjakan tiap kunjungan.
+Klik nama pasien -> muncul riwayat kunjungan pertama hingga terakhir, beserta
+terapis yang mengerjakan tiap kunjungan.
 
-### Yang SUDAH ada (sudah diperiksa di kode)
+### Temuan A - riwayat tidak pernah sampai ke modal
 
-`src/components/PatientTimelineModal.tsx` (492 baris) sudah menampilkan persis itu:
+`PatientTimelineModal` membaca riwayat dari satu tempat saja:
+`masterPatient.visitHistory`.
 
-- Daftar kunjungan berurutan waktu, terbaru di atas
-- Tiap kunjungan mencantumkan **nama terapis** (`v.officerName`), kotak terapi,
-  dan disiplinnya (fisio / okupasi / wicara)
-- Penanda **1st PJ (Terapis Awal)** per disiplin dan penanda kunjungan terakhir
-- Penyaringan per disiplin, lengkap dengan jumlah kunjungan tiap disiplin
-- Tombol "Arahkan Antrean ke terapis ini"
+Field itu **hanya diisi di sisi klien** (`src/App.tsx:1601-1632`, saat pasien
+didaftarkan). Di `server.ts` kata `visitHistory` **tidak muncul sama sekali** -
+server tidak pernah menyimpan, menggabungkan, atau mengembalikannya.
 
-Jadi riwayatnya sudah lengkap dan sudah berjalan.
+Akibatnya riwayat itu tidak bertahan: tidak tersimpan di server, tidak menyeberang
+antar perangkat, dan hilang begitu data master disegarkan dari server.
 
-### Yang KURANG - hanya satu hal
+Yang ganjil pada tampilan RM 283139 menegaskan ini: kartu 1st PJ tahu ada
+Okupasi (Cecep, 14 Sep) dan Wicara (Monalisa, 14 Sep), tetapi keduanya tidak ada
+di daftar - sebab kartu itu dihitung dari sumber lain
+(`getPatientMultiDisciplineSummary`), bukan dari `visitHistory`.
 
-Modal itu **tidak terbuka dari nama pasien**. Pemicunya ada di
-`src/components/QueueBoxCard.tsx` baris 1259, 1274, 1657, 1670 - semuanya
-menempel pada lencana kecil bertuliskan `1st: <Nama>` dan `K-3`.
+### Temuan B - baris riwayat PALSU saat data kosong (PENTING)
 
-Lencana itu kecil dan tidak terlihat seperti sesuatu yang bisa ditekan, jadi
-wajar kalau tidak diketahui. Nama pasien sendiri belum menjadi pemicu.
+`PatientTimelineModal.tsx` baris 59-70: kalau `visitHistory` kosong, modal
+**mengarang satu baris kunjungan** dari `firstVisitDate` + `firstOfficerName`,
+diberi catatan "Kedatangan / Kunjungan Awal Terapi Pasien" dan diagnosa dari
+`defaultDiagnosis`.
 
-### Pekerjaan yang perlu dilakukan
+Baris itu tampil persis seperti catatan kunjungan sungguhan - bertanggal,
+bernama terapis, berdiagnosa - padahal bukan rekaman kejadian. Pada konteks
+rekam medis ini berbahaya: petugas bisa membacanya sebagai riwayat asli.
 
-Membuat nama pasien ikut memanggil `setSelectedPatientForTimeline(patient)`,
-dengan tanda visual bahwa nama itu bisa ditekan.
+Baris karangan inilah yang terlihat pada RM 283139, bukan data sebenarnya.
 
-Perlu diperiksa saat mengerjakan:
-- Jangan sampai bentrok dengan tindakan lain yang sudah menempel pada nama
-  pasien (kalau ada) - terutama pada layar sentuh
-- Empat titik pemicu lama tetap dipertahankan, jangan dihapus
+**Perbaikan minimal yang harus ikut dikerjakan:** kalau riwayat kosong, tampilkan
+keterangan "riwayat belum tersedia" - jangan mengarang baris.
 
-### Yang benar-benar TIDAK bisa ditampilkan
+### Usul cara mengerjakan
 
-Kalau pasien berpindah kotak lebih dari sekali **dalam satu kunjungan yang sama**,
-terapis di tengah tidak pernah disimpan - satu kunjungan hanya menyimpan
-`firstOfficerName` dan `officerName`. Riwayat antar kunjungan tidak terpengaruh
-oleh keterbatasan ini.
+Jangan menambal `visitHistory`. Sumber yang benar sudah ada: **arsip harian**
+menyimpan tiap kunjungan lengkap dengan `medicalRecordNo`, `officerName`,
+`boxTitle`, `visitDate`, `diagnosis`, dan `actionCode`.
 
-Perlu ditanyakan: apakah rantai perpindahan dalam satu kunjungan juga dibutuhkan?
-Kalau ya, itu pekerjaan terpisah dan hanya berlaku untuk kunjungan ke depan.
+Usulnya: endpoint baru yang mengumpulkan seluruh kunjungan satu nomor RM dari
+arsip harian, lalu modal membaca dari situ.
+
+Keunggulannya - riwayat **lama langsung ikut tampil**, termasuk 7 kunjungan
+RM 283139 itu, tanpa menunggu data baru terkumpul. Menambal `visitHistory` hanya
+akan berlaku untuk kunjungan yang akan datang.
+
+### Yang tetap tidak bisa ditampilkan
+
+Perpindahan kotak **di dalam satu kunjungan yang sama** tidak pernah disimpan -
+satu kunjungan hanya menyimpan `firstOfficerName` dan `officerName`. Riwayat
+antar kunjungan tidak terpengaruh.
+
+### Pekerjaan kecil yang menyusul
+
+Nama pasien belum menjadi pemicu modal. Pemicunya sekarang lencana kecil
+`1st: <Nama>` / `K-3` di `QueueBoxCard.tsx` baris 1259, 1274, 1657, 1670.
 
 ---
 
