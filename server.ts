@@ -1929,6 +1929,29 @@ function handleFirestoreQuotaError(err: any, label: string): boolean {
 // Penggabungan ini TIDAK menghalangi penghapusan yang sah: pasien yang memang dihapus
 // atau dibersihkan tetap tersaring lewat tombstone, dan "Bersihkan Antrean" tetap bisa
 // mengosongkan papan sepenuhnya.
+// Firestore MENOLAK dokumen yang memuat nilai undefined - setDoc() langsung melempar
+// "Unsupported field value: undefined". Penolakan itu ditangkap sebagai kegagalan
+// pencadangan biasa, jadi gejalanya SENYAP: papan antrean berhenti tercadangkan tanpa
+// ada yang menyadarinya, dan salinan kedua yang selama ini menyelamatkan kita hilang.
+//
+// Sumber undefined-nya bisa dari mana saja: hasil pickCompletionState yang tidak punya
+// stempel waktu, field opsional pasien seperti lastCalledAt/completedAt, atau apa pun
+// yang terbawa dari state lokal. Karena itu dibersihkan menyeluruh di satu tempat,
+// bukan ditambal per field.
+function buangUndefined<T>(nilai: T): T {
+  if (nilai === null || typeof nilai !== 'object') return nilai;
+  if (Array.isArray(nilai)) {
+    return (nilai as any[]).map((v) => buangUndefined(v)) as any;
+  }
+  const keluar: any = {};
+  for (const k of Object.keys(nilai as any)) {
+    const v = (nilai as any)[k];
+    if (v === undefined) continue;
+    keluar[k] = buangUndefined(v);
+  }
+  return keluar;
+}
+
 function gabungkanSnapshotAntrean(cloud: any, lokal: any): { hasil: any; ditahan: string[] } {
   if (!cloud || typeof cloud !== 'object') return { hasil: lokal, ditahan: [] };
   if (!lokal || typeof lokal !== 'object') return { hasil: lokal, ditahan: [] };
@@ -1995,12 +2018,14 @@ function gabungkanSnapshotAntrean(cloud: any, lokal: any): { hasil: any; ditahan
   });
 
   return {
-    hasil: {
+    // Dibersihkan di sini, bukan di pemanggilnya: hasil inilah yang dikirim ke setDoc,
+    // dan penggabungan di atas justru yang memunculkan undefined-nya.
+    hasil: buangUndefined({
       ...cloud,
       ...lokal,
       patients: Array.from(peta.values()),
       boxes: kotakGabung,
-    },
+    }),
     ditahan,
   };
 }
@@ -2064,10 +2089,10 @@ async function flushQueueStateMirrorNow(): Promise<void> {
       }
     }
 
-    await setDoc(QUEUE_STATE_DOC_REF, {
+    await setDoc(QUEUE_STATE_DOC_REF, buangUndefined({
       ...merged,
       lastMirroredAt: new Date().toISOString(),
-    });
+    }));
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'FirestoreMirror');
   }
@@ -2296,7 +2321,7 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
       if (berhasil) sidikTanggalTercadangkan.set(dateKey, sidik);
     }
 
-    await setDoc(dailyArchiveMonthDocRef(monthKey), { archive: merged, lastMirroredAt: new Date().toISOString() });
+    await setDoc(dailyArchiveMonthDocRef(monthKey), buangUndefined({ archive: merged, lastMirroredAt: new Date().toISOString() }));
 
     // Simpan hasil gabungan ke disk lokal juga (TANPA memicu pencadangan lagi), supaya
     // instance yang tadinya datanya belum lengkap ikut lengkap setelah satu putaran.
