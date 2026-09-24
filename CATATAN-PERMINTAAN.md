@@ -8,71 +8,61 @@ supaya tidak hilang antar sesi.
 ## 1. Riwayat terapis per pasien
 
 **Diminta:** 24 September 2026
-**Status:** tampilannya sudah ada, DATANYA yang tidak sampai
-**Bukti:** pasien RM 283139 - header "Total Kunjungan: 7x", tetapi daftar
-riwayatnya hanya menampilkan 1 baris
+**Status:** SELESAI - commit 96dda7d, prompt AI Studio sudah diserahkan
+**Menunggu:** penerapan di AI Studio dan publish
 
-### Yang diminta
+### Yang dikerjakan
 
-Klik nama pasien -> muncul riwayat kunjungan pertama hingga terakhir, beserta
-terapis yang mengerjakan tiap kunjungan.
+- `server.ts`: endpoint `GET /api/patient-history?rm=...` mengumpulkan seluruh
+  kunjungan satu nomor RM dari arsip harian lintas bulan. Kunjungan dinomori dari
+  yang terlama, nomor per disiplin dihitung, dikirim dari yang terbaru.
+- `PatientTimelineModal.tsx`: membaca dari endpoint itu; `visitHistory` jadi
+  cadangan saja; baris kunjungan karangan DIHAPUS; saat kosong menampilkan
+  keterangan jujur.
+- `QueueBoxCard.tsx`: nomor RM jadi pemicu modal riwayat, di daftar antrean
+  maupun daftar selesai.
 
-### Temuan A - riwayat tidak pernah sampai ke modal
+Karena sumbernya arsip harian, riwayat LAMA ikut tampil - tidak mulai dari nol.
 
-`PatientTimelineModal` membaca riwayat dari satu tempat saja:
-`masterPatient.visitHistory`.
+### Uji
 
-Field itu **hanya diisi di sisi klien** (`src/App.tsx:1601-1632`, saat pasien
-didaftarkan). Di `server.ts` kata `visitHistory` **tidak muncul sama sekali** -
-server tidak pernah menyimpan, menggabungkan, atau mengembalikannya.
+Ditulis lebih dulu, dijalankan terhadap kode lama untuk membuktikan ujinya
+menangkap masalah: endpoint 0/1 -> 11/11, tampilan E2E 6/16 -> 16/16. Modal lama
+terbukti hanya menampilkan 1 kunjungan dari 6, lengkap dengan baris karangannya.
 
-Akibatnya riwayat itu tidak bertahan: tidak tersimpan di server, tidak menyeberang
-antar perangkat, dan hilang begitu data master disegarkan dari server.
+### Keputusan yang diambil, perlu persetujuan kalau mau diubah
 
-Yang ganjil pada tampilan RM 283139 menegaskan ini: kartu 1st PJ tahu ada
-Okupasi (Cecep, 14 Sep) dan Wicara (Monalisa, 14 Sep), tetapi keduanya tidak ada
-di daftar - sebab kartu itu dihitung dari sumber lain
-(`getPatientMultiDisciplineSummary`), bukan dari `visitHistory`.
+Pemicunya dipasang di **nomor RM**, BUKAN nama pasien seperti yang diminta.
+Sebabnya nama pasien sudah dipakai `startEditPatient` - "Edit Data & Tindakan" -
+yang dipakai petugas setiap hari.
 
-### Temuan B - baris riwayat PALSU saat data kosong (PENTING)
+Kalau tetap ingin di nama pasien, tombol Edit harus dipindah dulu ke tempat lain.
+Itu mengubah kebiasaan petugas, jadi perlu diputuskan pemakainya.
 
-`PatientTimelineModal.tsx` baris 59-70: kalau `visitHistory` kosong, modal
-**mengarang satu baris kunjungan** dari `firstVisitDate` + `firstOfficerName`,
-diberi catatan "Kedatangan / Kunjungan Awal Terapi Pasien" dan diagnosa dari
-`defaultDiagnosis`.
+### Sisa yang belum bisa dikerjakan
 
-Baris itu tampil persis seperti catatan kunjungan sungguhan - bertanggal,
-bernama terapis, berdiagnosa - padahal bukan rekaman kejadian. Pada konteks
-rekam medis ini berbahaya: petugas bisa membacanya sebagai riwayat asli.
+Perpindahan kotak DI DALAM satu kunjungan yang sama tidak pernah disimpan - satu
+kunjungan hanya menyimpan `firstOfficerName` dan `officerName`. Kalau rantai
+perpindahan ini dibutuhkan, itu pekerjaan terpisah dan hanya berlaku untuk
+kunjungan yang akan datang.
 
-Baris karangan inilah yang terlihat pada RM 283139, bukan data sebenarnya.
+---
 
-**Perbaikan minimal yang harus ikut dikerjakan:** kalau riwayat kosong, tampilkan
-keterangan "riwayat belum tersedia" - jangan mengarang baris.
+## 2. Fixture uji yang pecah saat melewati tengah malam WIB
 
-### Usul cara mengerjakan
+**Ditemukan:** 25 September 2026, dini hari
+**Status:** sudah diperbaiki di berkas uji (di luar repositori aplikasi)
 
-Jangan menambal `visitHistory`. Sumber yang benar sudah ada: **arsip harian**
-menyimpan tiap kunjungan lengkap dengan `medicalRecordNo`, `officerName`,
-`boxTitle`, `visitDate`, `diagnosis`, dan `actionCode`.
+`uji_tutup.py` dan `uji_tutup2.py` memberi stempel waktu "1 jam lalu". Kalau uji
+dijalankan sekitar pukul 00.30 WIB, stempel itu jatuh ke tanggal kemarin,
+sementara arsip yang ditanya adalah tanggal hari ini - jadi hasilnya kosong dan
+uji gagal padahal tidak ada yang rusak.
 
-Usulnya: endpoint baru yang mengumpulkan seluruh kunjungan satu nomor RM dari
-arsip harian, lalu modal membaca dari situ.
+Sudah dipastikan BUKAN regresi: gagal sama persis pada kode HEAD tanpa perubahan.
+Aturan "tanggal kunjungan = tanggal pendaftaran" justru bekerja benar.
 
-Keunggulannya - riwayat **lama langsung ikut tampil**, termasuk 7 kunjungan
-RM 283139 itu, tanpa menunggu data baru terkumpul. Menambal `visitHistory` hanya
-akan berlaku untuk kunjungan yang akan datang.
-
-### Yang tetap tidak bisa ditampilkan
-
-Perpindahan kotak **di dalam satu kunjungan yang sama** tidak pernah disimpan -
-satu kunjungan hanya menyimpan `firstOfficerName` dan `officerName`. Riwayat
-antar kunjungan tidak terpengaruh.
-
-### Pekerjaan kecil yang menyusul
-
-Nama pasien belum menjadi pemicu modal. Pemicunya sekarang lencana kecil
-`1st: <Nama>` / `K-3` di `QueueBoxCard.tsx` baris 1259, 1274, 1657, 1670.
+Pelajaran untuk uji berikutnya: setiap stempel waktu pada fixture harus dipatok
+agar tetap berada pada hari WIB yang sama dengan tanggal arsip yang diuji.
 
 ---
 
