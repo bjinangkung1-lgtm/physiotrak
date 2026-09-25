@@ -203,7 +203,94 @@ layar, periksa sungguh-sungguh - jangan dianggap artefak.
 
 ---
 
-## 5. Fixture uji yang pecah saat melewati tengah malam WIB
+## 5. INSIDEN 25 September 2026 - 23 kunjungan hilang
+
+**Status:** penyebab ditemukan, dua perlindungan sudah dipasang (commit c0cc66a).
+Data yang hilang TIDAK dapat dipulihkan.
+
+### Kronologi
+
+| Waktu WIB | Kejadian |
+|---|---|
+| 10.13 | Reset ("Bersihkan Antrean") menutup hari sebelumnya - normal |
+| 10.14 | Pasien hari ini mulai masuk |
+| 13.50.38 | Perubahan papan terakhir yang tercadangkan |
+| 13.50.42 | **Pencadangan terakhir yang BERHASIL** - 60 pasien |
+| 13.51 | Seluruh pencadangan berhenti. Tidak ada tanda apa pun di layar |
+| ~13.51-16.30 | Pasien bertambah 60 -> 83, semuanya tanpa salinan |
+| 16.30 | Papan masih menampilkan 83 |
+| 16.30-17.04 | Wadah server berganti; keadaan dipulihkan dari salinan 13.50 |
+| 17.04 | Papan dan register kembali ke 60. **23 kunjungan hilang** |
+
+### Bukti
+
+- `current_queue.lastMirroredAt` = 13.50.42, `master_patients` = 13.51.27,
+  arsip bulanan = **kemarin**. Ketiganya berhenti dalam rentang satu menit ->
+  kegagalan menyeluruh, bukan satu dokumen.
+- Arsip awan tidak memuat 25 September di **keempat** tempat penyimpanan.
+- `/api/deletion-audit` KOSONG - tidak ada yang menghapus. Audit disimpan di disk
+  server yang ikut hilang saat wadah berganti; kosongnya audit justru bukti bahwa
+  server sudah restart.
+- `firestoreMirrorDisabled: false` - tetapi itu server BARU. Penanda kuota
+  disimpan di disk dan ikut hilang.
+
+### Penyebab
+
+Dugaan terkuat: kuota Firestore bersama (AI Studio Starter Tier) habis pukul 13.51.
+Tidak dapat dibuktikan karena penandanya hilang bersama disk.
+
+**Cacat yang sebenarnya bukan kuotanya**, melainkan: disk server bersifat sementara,
+sehingga satu-satunya penyimpanan yang bertahan adalah awan. Begitu jalur ke awan
+tertutup, tidak ada perlindungan apa pun - dan keadaan itu berlangsung senyap.
+
+### Yang sudah dipasang
+
+1. **Keadaan pencadangan dilaporkan apa adanya.** Sebelumnya hanya kegagalan kuota
+   yang menyalakan penanda. Sekarang `/api/system/status` mengirim `mirrorHealthy`,
+   `mirrorPendingMinutes`, `lastMirrorSuccessAt`, `lastMirrorErrorAt`,
+   `lastMirrorError`; spanduk merah tak bisa ditutup muncul setelah 10 menit.
+   Ambang 10 menit JANGAN diperkecil - peringatan palsu membuat petugas berhenti
+   membaca peringatan.
+2. **Pemulihan menggabungkan, bukan menimpa.** `/api/backup/restore` dulu mengganti
+   seluruh arsip; memulihkan cadangan lama akan menghapus catatan yang lebih baru.
+
+### Yang BELUM tertutup
+
+- Perlindungan di atas membuat kegagalan **terlihat**, bukan mencegahnya.
+- Belum ada jalur cadangan kedua dengan kuota terpisah (usulan: unggah otomatis ke
+  Google Drive; perlu kunci akun layanan, menunggu keputusan pemakai).
+- Selama disk server sementara dan kuota berbagi, kejadian ini bisa terulang.
+
+### Untuk laporan supervisor
+
+> Aplikasi berjalan pada wadah sementara yang kehilangan seluruh isinya setiap kali
+> berganti. Satu-satunya perlindungan adalah pencadangan ke layanan awan berkuota
+> bersama. Ketika kuota itu habis pada 25 September pukul 13.51, sistem terus
+> berjalan tanpa salinan selama 2 jam 40 menit tanpa peringatan apa pun, lalu
+> kehilangan 23 kunjungan saat wadah berganti.
+
+Ditambah 11 kunjungan yang hilang pada 21 September, totalnya **34 kunjungan hilang
+dalam lima hari**. Ini dasar terkuat untuk memindahkan aplikasi ke server rumah
+sakit dengan penyimpanan permanen.
+
+### Kebiasaan yang perlu dijalankan sampai pindah
+
+- **Backup Lengkap dua kali sehari** (siang dan sore), simpan ke folder Google Drive
+  yang tersinkron. Ini satu-satunya salinan yang tidak bergantung pada kuota
+  maupun wadah server.
+- Kalau spanduk merah muncul, segera Backup Lengkap - jangan menunggu.
+
+### Catatan: "Bersihkan Antrean" adalah RESET PENUH
+
+Tombol merah di Database Harian memanggil `executeResetAllData` lewat dialog PIN.
+Ia mengosongkan papan, menandai seluruh id pasien sebagai dihapus **permanen**
+(tombstone yang bertahan antar wadah), serta menghapus log panggilan dan notifikasi.
+Arsip harian tetap selamat. Perlu diketahui pemakai - namanya terdengar jauh lebih
+ringan daripada yang sebenarnya dilakukannya.
+
+---
+
+## 6. Fixture uji yang pecah saat melewati tengah malam WIB
 
 **Ditemukan:** 25 September 2026, dini hari
 **Status:** sudah diperbaiki di berkas uji (di luar repositori aplikasi)
