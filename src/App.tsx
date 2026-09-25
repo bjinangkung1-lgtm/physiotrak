@@ -37,7 +37,7 @@ import { isAppAuthenticated, lockApp, syncAppPasswordFromCloud, fetchAppPassword
 import { syncDatabasePasswordFromCloud, fetchDatabasePasswordFromCloud, databaseService } from './utils/databaseService';
 import { computeResponseTimeAnalytics } from './utils/responseTimeAnalytics';
 import { compareRoomNumbers } from './utils/ranapQueueUtils';
-import { Pin, Sparkles, AlertCircle, X } from 'lucide-react';
+import { Pin, Sparkles, AlertCircle, X, Menu } from 'lucide-react';
 import { realtimeSync } from './utils/syncService';
 import { cloudDatabaseService } from './utils/cloudDatabaseService';
 
@@ -2655,13 +2655,59 @@ export default function App() {
         onOpenRanapQueue={() => setIsRanapQueueOpen(true)}
         avgWaitMinutes={globalResponseAnalytics.avgWaitMinutes}
         overloadCount={overloadedTherapistsCount}
+        onOpenTVDisplay={() => setIsTVDisplayOpen(true)}
+        onOpenGlobalHistory={() => {
+          setHistoryBox(null);
+          setIsHistoryOpen(true);
+        }}
+        onOpenGeneralQR={() => {
+          setQrModalPatient(null);
+          setQrModalBox(null);
+          setIsQRModalOpen(true);
+        }}
+        notifications={notifications}
+        unreadNotificationsCount={unreadCount}
+        onResetNotifications={() => setUnreadCount(0)}
+        onClearAllNotifications={() => {
+          hasLocalMutationRef.current = true;
+          setNotifications([]);
+          setUnreadCount(0);
+        }}
+        onOpenChangePassword={() => setIsChangeAppPasswordOpen(true)}
+        onLockApp={handleLockApp}
       />
+
+      {/* Tab menu di tepi kiri layar, hanya untuk layar lebar. Di HP dan tablet
+          tegak, menu sudah ada di bilah bawah (MobileBottomNav). */}
+      <button
+        type="button"
+        id="btn-toggle-menu-sidebar"
+        onClick={() => setIsTherapistSidebarOpen(true)}
+        className={`hidden lg:flex fixed left-0 top-1/2 -translate-y-1/2 z-40 flex-col items-center gap-3 py-4 pl-3 pr-2 -ml-3 hover:ml-0 active:ml-0 rounded-r-2xl bg-slate-900/90 backdrop-blur-md border border-l-0 border-teal-400/30 shadow-[4px_0_24px_-6px_rgba(45,212,191,0.45)] text-teal-300 transition-all duration-200 cursor-pointer ${
+          isTherapistSidebarOpen ? 'opacity-0 pointer-events-none' : ''
+        }`}
+        title="Buka Menu Manajemen & Laporan IRM"
+        aria-label="Buka Menu"
+      >
+        <span className="relative">
+          <Menu className="w-5 h-5" />
+          {unreadCount > 0 && (
+            <span className="absolute -top-2 -right-2 min-w-4 h-4 px-1 bg-rose-600 text-white text-[9px] font-black rounded-full flex items-center justify-center border border-slate-900">
+              {unreadCount}
+            </span>
+          )}
+        </span>
+        <span className="flex flex-col gap-1 opacity-60">
+          <span className="w-1 h-1 rounded-full bg-teal-300" />
+          <span className="w-1 h-1 rounded-full bg-teal-300" />
+          <span className="w-1 h-1 rounded-full bg-teal-300" />
+        </span>
+      </button>
 
       {/* Top Header */}
       <Header
         boxes={boxes}
         patients={patients}
-        notifications={notifications}
         selectedTherapistBoxId={selectedTherapistBoxId}
         onSelectTherapist={(boxId) => {
           setSelectedTherapistBoxId(boxId);
@@ -2673,38 +2719,12 @@ export default function App() {
         setSearchQuery={setSearchQuery}
         statusFilter={statusFilter}
         setStatusFilter={setStatusFilter}
-        onOpenAddPatient={() => {
-          setAddPatientBoxId(undefined);
-          setIsAddPatientOpen(true);
-        }}
         onOpenDailyDatabase={() => setIsDailyDatabaseOpen(true)}
-        onOpenAddBox={() => setIsAddBoxOpen(true)}
         onOpenMonthlyReport={() => setIsMonthlyReportOpen(true)}
-        onOpenTVDisplay={() => setIsTVDisplayOpen(true)}
-        onOpenGeneralQR={() => {
-          setQrModalPatient(null);
-          setQrModalBox(null);
-          setIsQRModalOpen(true);
-        }}
-        onOpenGlobalHistory={() => {
-          setHistoryBox(null);
-          setIsHistoryOpen(true);
-        }}
-        onToggleTherapistSidebar={() => setIsTherapistSidebarOpen(prev => !prev)}
-        isTherapistSidebarOpen={isTherapistSidebarOpen}
         therapistsCount={boxes.length}
-        unreadNotificationsCount={unreadCount}
-        onResetNotifications={() => setUnreadCount(0)}
-        onClearAllNotifications={() => {
-          hasLocalMutationRef.current = true;
-          setNotifications([]);
-          setUnreadCount(0);
-        }}
         totalActiveCount={totalActiveCount}
         totalCompletedCount={totalCompletedCount}
         totalWarningCount={totalWarningCount}
-        currentView={currentView}
-        onNavigateView={(view) => setCurrentView(view)}
         overloadCount={overloadedTherapistsCount}
         avgWaitMinutes={globalResponseAnalytics.avgWaitMinutes}
         onOpenIntelligence={handleOpenAnalytics}
@@ -2713,10 +2733,7 @@ export default function App() {
           setLainLainInitialTab(tab || 'kas');
           setIsLainLainOpen(true);
         }}
-        onOpenSop={() => setIsSopOpen(true)}
         isRealtimeConnected={isRealtimeConnected}
-        onLockApp={handleLockApp}
-        onOpenChangePassword={() => setIsChangeAppPasswordOpen(true)}
       />
 
       {/* Mobile Swipeable Therapist Bar (Visible on mobile/tablet) */}
@@ -3086,6 +3103,15 @@ export default function App() {
         currentPatients={patients}
         onAddPatientToQueue={handleAddPatient}
         onResetAllData={handleResetAllData}
+        onOpenAddPatient={() => {
+          setIsDailyDatabaseOpen(false);
+          setAddPatientBoxId(undefined);
+          setIsAddPatientOpen(true);
+        }}
+        onOpenAddBox={() => {
+          setIsDailyDatabaseOpen(false);
+          setIsAddBoxOpen(true);
+        }}
       />
 
       <PatientQRModal

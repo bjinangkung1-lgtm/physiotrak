@@ -4,7 +4,7 @@ import {
   CheckCircle2, Clock, AlertOctagon, Hospital, Plus, Edit2, 
   Trash2, ArrowRightCircle, Phone, User, RefreshCw, ChevronRight, FileSpreadsheet, Zap,
   Upload, Database, FileText, AlertCircle, Check, FileDown, Layers, HelpCircle,
-  Lock, Unlock, KeyRound, Eye, EyeOff, ShieldCheck, ShieldAlert
+  Lock, Unlock, KeyRound, Eye, EyeOff, ShieldCheck, ShieldAlert, FolderPlus
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { MasterPatient, DailyPatientVisit, QueueBox, PatientItem } from '../types';
@@ -28,6 +28,8 @@ interface DailyPatientDatabaseModalProps {
   currentPatients: PatientItem[];
   onAddPatientToQueue: (patientData: Omit<PatientItem, 'id' | 'createdAt' | 'calledCount' | 'completed'>) => void;
   onResetAllData?: () => void;
+  onOpenAddPatient?: () => void;
+  onOpenAddBox?: () => void;
 }
 
 export const DailyPatientDatabaseModal: React.FC<DailyPatientDatabaseModalProps> = ({
@@ -37,6 +39,8 @@ export const DailyPatientDatabaseModal: React.FC<DailyPatientDatabaseModalProps>
   currentPatients,
   onAddPatientToQueue,
   onResetAllData,
+  onOpenAddPatient,
+  onOpenAddBox,
 }) => {
   const [activeTab, setActiveTab] = useState<'daily' | 'master'>('daily');
   
@@ -696,7 +700,37 @@ export const DailyPatientDatabaseModal: React.FC<DailyPatientDatabaseModalProps>
             </button>
           </div>
 
-          <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+          <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 shrink-0">
+            {/* + Pasien & + Kotak - dipindah dari header, hanya setelah database dibuka */}
+            {isDbUnlocked && (onOpenAddPatient || onOpenAddBox) && (
+              <div className="flex items-center gap-1.5">
+                {onOpenAddPatient && (
+                  <button
+                    type="button"
+                    id="btn-add-patient"
+                    onClick={onOpenAddPatient}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white flex items-center gap-1 cursor-pointer transition-all shadow-xs"
+                    title="Tambah Pasien Baru ke Antrean"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Pasien</span>
+                  </button>
+                )}
+                {onOpenAddBox && (
+                  <button
+                    type="button"
+                    id="btn-add-box"
+                    onClick={onOpenAddBox}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1.5 cursor-pointer transition-all"
+                    title="Buat Kotak Antrean Baru"
+                  >
+                    <FolderPlus className="w-3.5 h-3.5 text-slate-300" />
+                    <span>Kotak</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Lock / Password Control Button */}
             {isDbUnlocked ? (
               <div className="flex items-center gap-1.5">
@@ -707,7 +741,7 @@ export const DailyPatientDatabaseModal: React.FC<DailyPatientDatabaseModalProps>
                   title="Ubah Password Database"
                 >
                   <KeyRound className="w-3.5 h-3.5 text-teal-400" />
-                  <span className="hidden md:inline">Ganti Password</span>
+                  <span className="hidden xl:inline">Ganti Password</span>
                 </button>
                 <button
                   type="button"
