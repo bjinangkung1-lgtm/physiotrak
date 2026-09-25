@@ -224,8 +224,8 @@ agar tetap berada pada hari WIB yang sama dengan tanggal arsip yang diuji.
 ## 6. Header ringkas - area kotak antrean diperluas
 
 **Diminta:** 25 September 2026
-**Status:** SELESAI - commit c352eef, prompt AI Studio sudah diserahkan
-**Menunggu:** penerapan di AI Studio dan publish
+**Status:** SELESAI - commit c352eef, sudah diterapkan di AI Studio dan dipublish
+(25 September 2026)
 
 ### Masalahnya
 
@@ -301,6 +301,25 @@ Tinggi header: tablet 209 -> 55 px, HP 186 -> 100 px.
   "Active", bukan "active". Bandingkan tanpa peduli huruf besar-kecil.
 - **Isi sidebar bisa digulir.** Butir paling bawah (SOP) berada di luar layar
   sampai digulir; periksa keterlihatannya sesudah `scrollIntoView`.
+
+### Penerapan di AI Studio - pelajaran
+
+- **Prompt ±29 ribu karakter terpotong** di AI Studio ("terpotong saat ringkasan
+  percakapan"), dan AI Studio hanya mengonfirmasi perbaikan lama. Prompt dipecah
+  jadi 3 bagian (±12, ±4, ±13 ribu karakter) dan diserahkan sebagai TEKS di chat,
+  bukan berkas - pemakai lebih suka tinggal menyalin.
+- **Urutan bagian disusun supaya aplikasi tetap jalan di sela-selanya**:
+  (1) menambah tempat baru di sidebar dan Database, (2) menyambungkannya di
+  `App.tsx` dan menambah tab tepi kiri, (3) baru mengganti header dan membuang
+  props lama. Yang menghapus tombol harus paling akhir.
+- **Ringkasan AI Studio untuk bagian 1 melewatkan langkah 6-8 sidebar** (logika
+  aksi cepat, 4 tile, kartu petugas). Build tetap lulus karena props tidak
+  diperiksa (lihat jebakan di atas), jadi "build berhasil" BUKAN bukti. Dikirim
+  prompt susulan berisi langkah itu saja, dengan pesan "jangan ditambah kalau
+  sudah ada". Selalu cocokkan ringkasan AI Studio dengan daftar langkah, dan
+  minta pemakai memeriksa tampilannya sebelum publish.
+- Tab tepi kiri hanya muncul di lebar >= 1024 px. Panel pratinjau AI Studio
+  biasanya lebih sempit, jadi pemeriksaan harus di pratinjau layar penuh.
 
 ### Id tombol
 
