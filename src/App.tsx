@@ -432,6 +432,40 @@ const LiveClockFooter: React.FC = React.memo(() => {
 });
 
 export default function App() {
+  // PERINGATAN PENCADANGAN MATI.
+  //
+  // Pada 25 September 2026 pencadangan berhenti pukul 13.51 tanpa satu pun tanda di
+  // layar. Dua jam empat puluh menit kemudian wadah server berganti dan 23 kunjungan
+  // hilang, karena tidak pernah punya salinan. Peringatan ini ada supaya keadaan
+  // seperti itu terlihat dalam hitungan menit, bukan baru ketahuan setelah datanya
+  // hilang.
+  const [pencadanganBermasalah, setPencadanganBermasalah] = useState<{ menit: number; sebab: string | null } | null>(null);
+
+  useEffect(() => {
+    let batal = false;
+    const periksa = async () => {
+      try {
+        const r = await fetch('/api/system/status');
+        if (!r.ok) return;
+        const d = await r.json();
+        if (batal) return;
+        // Server lama belum mengirim mirrorHealthy. Jangan menuduh bermasalah kalau
+        // memang tidak ada kabarnya - peringatan palsu membuat orang berhenti membaca.
+        if (typeof d?.mirrorHealthy !== 'boolean') { setPencadanganBermasalah(null); return; }
+        setPencadanganBermasalah(
+          d.mirrorHealthy
+            ? null
+            : { menit: Number(d.mirrorPendingMinutes) || 0, sebab: d.lastMirrorError || null }
+        );
+      } catch {
+        // Gagal menghubungi server bukan berarti pencadangan mati - jangan beralarm.
+      }
+    };
+    periksa();
+    const jam = setInterval(periksa, 60000);
+    return () => { batal = true; clearInterval(jam); };
+  }, []);
+
   const [boxes, setBoxes] = useState<QueueBox[]>(() => {
     const saved = localStorage.getItem('antrian_boxes');
     if (!saved) return INITIAL_BOXES;
@@ -2656,6 +2690,30 @@ export default function App() {
         avgWaitMinutes={globalResponseAnalytics.avgWaitMinutes}
         overloadCount={overloadedTherapistsCount}
       />
+
+      {/* Peringatan pencadangan bermasalah. SENGAJA tidak bisa ditutup: selama ini
+          berlangsung, setiap perubahan berjalan tanpa salinan cadangan. */}
+      {pencadanganBermasalah && (
+        <div className="sticky top-0 z-[70] bg-gradient-to-r from-rose-700 via-rose-600 to-rose-700 text-white px-4 py-2.5 shadow-lg border-b-2 border-rose-900">
+          <div className="flex items-start gap-3 max-w-[1800px] mx-auto">
+            <span className="text-xl leading-none mt-0.5 shrink-0">&#9888;</span>
+            <div className="min-w-0 flex-1">
+              <div className="font-extrabold text-sm sm:text-base leading-snug">
+                PENCADANGAN TIDAK BERJALAN &mdash; sudah {pencadanganBermasalah.menit} menit
+              </div>
+              <div className="text-[12px] sm:text-xs text-rose-50/95 mt-0.5 leading-relaxed">
+                Data yang masuk sejak tadi <b>belum punya salinan</b>. Segera buka Database Harian
+                lalu tekan <b>Backup Lengkap</b> dan simpan berkasnya.
+                {pencadanganBermasalah.sebab ? (
+                  <span className="block mt-0.5 font-mono text-[10px] text-rose-100/80 break-all">
+                    {pencadanganBermasalah.sebab}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Top Header */}
       <Header

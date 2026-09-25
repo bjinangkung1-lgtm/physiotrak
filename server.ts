@@ -1968,7 +1968,49 @@ if (needsQuotaRetryScheduleOnBoot) {
   scheduleFirestoreQuotaRetry();
 }
 
+// KEADAAN PENCADANGAN - supaya kegagalan tidak bisa lolos diam-diam.
+//
+// Sebelumnya hanya kegagalan KUOTA yang menyalakan penanda; kegagalan jenis lain
+// cuma masuk log konsol yang tidak pernah dibaca siapa pun. Akibatnya
+// /api/system/status menjawab "sehat" padahal pencadangan sudah mati. Pada
+// 25 September 2026 keadaan itu berlangsung 2 jam 40 menit, lalu wadah server
+// berganti dan 23 kunjungan hilang karena tidak pernah punya salinan.
+//
+// Yang dipantau BUKAN "kapan terakhir menulis", melainkan "apakah ada perubahan
+// yang MENUNGGU dicadangkan terlalu lama". Kalau memang tidak ada perubahan,
+// diamnya pencadangan bukan tanda sakit - dan alarm palsu akan membuat petugas
+// belajar mengabaikan peringatan.
+const MIRROR_TERTUNDA_BATAS_MS = 10 * 60 * 1000;
+let mirrorSuksesTerakhirAt: string | null = null;
+let mirrorGagalTerakhirAt: string | null = null;
+let mirrorGagalTerakhirPesan: string | null = null;
+let mirrorTertundaSejak: number | null = null;
+
+function tandaiMirrorTertunda() {
+  if (mirrorTertundaSejak === null) mirrorTertundaSejak = Date.now();
+}
+function tandaiMirrorBerhasil() {
+  mirrorSuksesTerakhirAt = new Date().toISOString();
+  mirrorTertundaSejak = null;
+  mirrorGagalTerakhirPesan = null;
+}
+function tandaiMirrorGagal(err: any, label: string) {
+  mirrorGagalTerakhirAt = new Date().toISOString();
+  mirrorGagalTerakhirPesan = `[${label}] ${(err && err.message) || String(err)}`.slice(0, 300);
+}
+function keadaanMirror() {
+  const tertundaMs = mirrorTertundaSejak === null ? 0 : Date.now() - mirrorTertundaSejak;
+  return {
+    mirrorHealthy: !isFirestoreMirrorDisabled && tertundaMs < MIRROR_TERTUNDA_BATAS_MS,
+    mirrorPendingMinutes: Math.floor(tertundaMs / 60000),
+    lastMirrorSuccessAt: mirrorSuksesTerakhirAt,
+    lastMirrorErrorAt: mirrorGagalTerakhirAt,
+    lastMirrorError: mirrorGagalTerakhirPesan,
+  };
+}
+
 function handleFirestoreQuotaError(err: any, label: string): boolean {
+  tandaiMirrorGagal(err, label);
   const errMsg = err?.message || String(err);
   const isQuotaError =
     errMsg.includes('RESOURCE_EXHAUSTED') ||
@@ -2109,6 +2151,7 @@ let mirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingMirrorState: any = null;
 
 async function flushQueueStateMirrorNow(): Promise<void> {
+  tandaiMirrorTertunda();
   if (mirrorDebounceTimer) {
     clearTimeout(mirrorDebounceTimer);
     mirrorDebounceTimer = null;
@@ -2163,6 +2206,7 @@ async function flushQueueStateMirrorNow(): Promise<void> {
       ...merged,
       lastMirroredAt: new Date().toISOString(),
     }));
+    tandaiMirrorBerhasil();
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'FirestoreMirror');
   }
@@ -2311,6 +2355,7 @@ function mergeArchiveMonths(base: any, incoming: any): Record<string, any[]> {
 }
 
 async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
+  tandaiMirrorTertunda();
   const existingTimer = dailyArchiveMirrorDebounceTimers.get(monthKey);
   if (existingTimer) clearTimeout(existingTimer);
   dailyArchiveMirrorDebounceTimers.delete(monthKey);
@@ -2392,6 +2437,7 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
     }
 
     await setDoc(dailyArchiveMonthDocRef(monthKey), buangUndefined({ archive: merged, lastMirroredAt: new Date().toISOString() }));
+    tandaiMirrorBerhasil();
 
     // Simpan hasil gabungan ke disk lokal juga (TANPA memicu pencadangan lagi), supaya
     // instance yang tadinya datanya belum lengkap ikut lengkap setelah satu putaran.
@@ -2525,6 +2571,7 @@ let masterPatientsMirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingMasterPatientsMirror: any[] | null = null;
 
 async function flushMasterPatientsMirrorNow(): Promise<void> {
+  tandaiMirrorTertunda();
   if (masterPatientsMirrorDebounceTimer) {
     clearTimeout(masterPatientsMirrorDebounceTimer);
     masterPatientsMirrorDebounceTimer = null;
@@ -2541,6 +2588,7 @@ async function flushMasterPatientsMirrorNow(): Promise<void> {
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
     await setDoc(MASTER_PATIENTS_DOC_REF, { patients: sanitized, lastMirroredAt: new Date().toISOString() });
+    tandaiMirrorBerhasil();
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'MasterPatientsMirror');
   }
@@ -2592,6 +2640,7 @@ let ranapHistoryMirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingRanapHistoryMirror: any[] | null = null;
 
 async function flushRanapHistoryMirrorNow(): Promise<void> {
+  tandaiMirrorTertunda();
   if (ranapHistoryMirrorDebounceTimer) {
     clearTimeout(ranapHistoryMirrorDebounceTimer);
     ranapHistoryMirrorDebounceTimer = null;
@@ -2608,6 +2657,7 @@ async function flushRanapHistoryMirrorNow(): Promise<void> {
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
     await setDoc(RANAP_HISTORY_DOC_REF, { history: sanitized, lastMirroredAt: new Date().toISOString() });
+    tandaiMirrorBerhasil();
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'RanapHistoryMirror');
   }
@@ -3398,7 +3448,9 @@ app.get('/api/queue', (req, res) => {
 // GET status kesehatan sistem (dipakai klien untuk menampilkan indikator kalau
 // cadangan otomatis ke Cloud Firestore sedang bermasalah/dinonaktifkan).
 app.get('/api/system/status', (req, res) => {
-  res.json({ status: 'ok', firestoreMirrorDisabled: isFirestoreMirrorDisabled });
+  // firestoreMirrorDisabled saja TIDAK cukup - penanda itu hanya menyala untuk
+  // kegagalan kuota. keadaanMirror() melaporkan keadaan yang sebenarnya.
+  res.json({ status: 'ok', firestoreMirrorDisabled: isFirestoreMirrorDisabled, ...keadaanMirror() });
 });
 
 // GET log audit penghapusan pasien/kotak & reset antrean (dipakai fitur "Restore
@@ -3833,11 +3885,47 @@ app.post('/api/backup/restore', (req, res) => {
       return res.status(400).json({ error: 'Format data backup tidak valid' });
     }
 
+    // MODE PEMULIHAN.
+    //
+    // Dulu pemulihan selalu MENIMPA: memulihkan cadangan pukul 14.00 pada pukul
+    // 17.00 menghapus seluruh catatan yang lahir di antaranya. Itu berbahaya, dan
+    // justru dipakai persis saat keadaan sedang genting.
+    //
+    // Sekarang bawaannya MENGGABUNGKAN: kunjungan dari berkas cadangan ditambahkan,
+    // sedangkan yang sudah ada TIDAK PERNAH ditimpa - yang ada di server dianggap
+    // lebih baru daripada isi berkas. Mode 'ganti' tetap tersedia kalau memang
+    // diminta khusus.
+    const modeArsip = options?.modeArsip === 'ganti' ? 'ganti' : 'gabung';
+
     if (Array.isArray(data.masterPatients)) {
-      saveMasterPatients(data.masterPatients);
+      if (modeArsip === 'ganti') {
+        saveMasterPatients(data.masterPatients);
+      } else {
+        const kunci = (p: any) => String((p && (p.medicalRecordNo || p.id)) || '').trim();
+        const peta = new Map<string, any>();
+        data.masterPatients.forEach((p: any) => { const k = kunci(p); if (k) peta.set(k, p); });
+        const sekarang = loadMasterPatients();
+        (Array.isArray(sekarang) ? sekarang : []).forEach((p: any) => { const k = kunci(p); if (k) peta.set(k, p); });
+        saveMasterPatients(Array.from(peta.values()));
+      }
     }
     if (data.dailyArchive && typeof data.dailyArchive === 'object') {
-      saveFullDailyArchive(data.dailyArchive);
+      if (modeArsip === 'ganti') {
+        saveFullDailyArchive(data.dailyArchive);
+      } else {
+        const hasil: Record<string, any[]> = { ...loadFullDailyArchive() };
+        for (const tgl of Object.keys(data.dailyArchive)) {
+          const dariCadangan = Array.isArray((data.dailyArchive as any)[tgl]) ? (data.dailyArchive as any)[tgl] : [];
+          const yangAda = Array.isArray(hasil[tgl]) ? hasil[tgl] : [];
+          const peta = new Map<string, any>();
+          // Urutannya penting: isi cadangan dimasukkan lebih dulu, lalu ditimpa
+          // oleh yang sudah ada di server - sehingga yang lebih baru menang.
+          dariCadangan.forEach((v: any) => { if (v && v.id) peta.set(String(v.id), v); });
+          yangAda.forEach((v: any) => { if (v && v.id) peta.set(String(v.id), v); });
+          hasil[tgl] = Array.from(peta.values());
+        }
+        saveFullDailyArchive(hasil);
+      }
     }
     if (data.inventory && typeof data.inventory === 'object') {
       saveInventoryDb(data.inventory);
