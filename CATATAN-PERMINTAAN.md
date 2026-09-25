@@ -221,6 +221,124 @@ agar tetap berada pada hari WIB yang sama dengan tanggal arsip yang diuji.
 
 ---
 
+## 6. Header ringkas - area kotak antrean diperluas
+
+**Diminta:** 25 September 2026
+**Status:** SELESAI - commit c352eef, prompt AI Studio sudah diserahkan
+**Menunggu:** penerapan di AI Studio dan publish
+
+### Masalahnya
+
+Header memakan 209 px dari 589 px tinggi layar tablet (35%), dan karena menempel
+di atas, ruang itu tetap hilang walau halaman digulir. Isinya 4 baris: judul,
+11 tombol, tombol divisi, dan pencarian.
+
+### Susunan baru (rancangan pemakai)
+
+- Kiri: tombol cari dan Fisio / Okupasi / Wicara
+- Tengah: logo Smart IRM RSPP, menonjol 14 px ke bawah dari tepi atas layar saat
+  halaman di puncak, merapat ke bilah saat digulir
+- Kanan: Semua / Menunggu / Selesai / Warning - tetap tombol saringan
+- Tab menu di tepi kiri layar, hanya tampil sebagian, membuka sidebar
+
+Tinggi header: tablet 209 -> 55 px, HP 186 -> 100 px.
+
+### Ke mana tombol-tombol lama
+
+| Tombol | Sekarang di |
+|---|---|
+| Menu | Tab tepi kiri (lg ke atas); di bawah lg tetap di bilah bawah HP |
+| + Pasien, + Kotak | Jendela Database, setelah password database dimasukkan |
+| Display TV, Riwayat, Link Aplikasi, Notifikasi | Aksi cepat di atas sidebar |
+| Ganti Password, Kunci/Logout | Kartu petugas di bawah sidebar |
+| SOP Word | Sudah ada di sidebar, jadi cukup dihapus dari header |
+| MENUNGGU / DIPANGGIL | Digabung ke tombol saringan |
+| Kembali ke Kotak Antrean | Dihapus; halaman analitik punya tombol "← Kotak Antrean" sendiri |
+
++ Pasien di bilah bawah HP TIDAK dipindah, atas permintaan pemakai.
+
+### Keputusan - JANGAN diubah tanpa alasan kuat
+
+1. **MENUNGGU/DIPANGGIL identik dengan Aktif/Selesai.** Angkanya dihitung dengan
+   rumus yang sama dengan syarat saringan `active`/`completed` di `App.tsx`.
+   Menampilkan keduanya berdampingan hanya mengulang angka yang sama.
+
+2. **Label "Dipanggil" selama ini KELIRU.** Menekan tombol panggil hanya menambah
+   `calledCount` dan `lastCalledAt`; ia TIDAK menandai pasien selesai. Angka
+   "Dipanggil" baru naik ketika pasien DICEKLIS. Pasien yang sudah dipanggil ke TV
+   tetapi belum diceklis tetap terhitung Menunggu. Karena itu labelnya "Selesai".
+   Kalau suatu saat ingin hitungan "sudah dipanggil tapi belum diceklis"
+   (`calledCount > 0 && !completed`), itu angka BARU, bukan sekadar ganti label.
+
+3. **+ Pasien dan + Kotak hanya ada di Database**, yang dikunci password database.
+   Petugas tanpa password tetap bisa menambah pasien lewat "Tambah Item" di tiap
+   kotak - form yang sama, kotak tujuannya sudah terisi.
+
+4. **Klik + Pasien / + Kotak di Database MENUTUP jendela Database dulu.** Ketiga
+   jendela memakai `z-50`, dan Database digambar paling akhir di `App.tsx`. Kalau
+   Database dibiarkan terbuka, form tambah muncul di BELAKANGNYA.
+
+5. **Tab menu di tepi kiri dipasang di `App.tsx`, bukan di dalam header.** Elemen
+   `fixed` di dalam induk yang memakai `backdrop-filter` menempel ke induk itu,
+   bukan ke layar.
+
+6. **Muat di lebar 1024 px pas-pasan.** Separuh kiri header di 1024 px persis
+   375 px. Ikon divisi dan label PRO baru tampil mulai 1280 px (`xl`), padding
+   header `lg:px-6`. Kalau menambah apa pun ke header, ukur ulang di 1024 px.
+
+### Jebakan yang ditemukan
+
+- **`npm run lint` TIDAK memeriksa props komponen.** `@types/react` tidak terpasang,
+  sehingga JSX bertipe `any` dan prop salah nama lolos diam-diam. Cara memeriksa:
+  salin `@types/react` dan `@types/react-dom` sementara ke `node_modules/@types`
+  (jangan disimpan ke `package.json`), jalankan `npx tsc --noEmit`, lalu bandingkan
+  dengan hasil sebelum perubahan. Saat ini ada 8 error lama yang bukan dari
+  perubahan ini.
+- **Uji E2E: `page.goto(..., { waitUntil: 'networkidle' })` tidak pernah selesai**
+  di aplikasi ini karena ada permintaan berkala. Pakai `'load'`, lalu tunggu
+  `header h1`.
+- **Banner "Status:" diberi `capitalize` oleh CSS**, jadi `innerText` mengembalikan
+  "Active", bukan "active". Bandingkan tanpa peduli huruf besar-kecil.
+- **Isi sidebar bisa digulir.** Butir paling bawah (SOP) berada di luar layar
+  sampai digulir; periksa keterlihatannya sesudah `scrollIntoView`.
+
+### Id tombol
+
+Id lama dipertahankan di tempat barunya supaya uji yang menarget id tetap
+menemukan tombolnya: `btn-toggle-menu-sidebar` (tab tepi kiri), `btn-open-tv`,
+`btn-global-history`, `btn-general-qr`, `btn-header-notifications`,
+`btn-header-change-password`, `btn-header-lock` (sidebar), `btn-add-patient`,
+`btn-add-box` (Database, hanya setelah dibuka). Yang hilang: `btn-mobile-menu`,
+`btn-open-sop-word`. Yang baru: `btn-header-search`.
+
+### Uji
+
+Uji E2E dijalankan pada salinan aplikasi dengan konfigurasi Firebase palsu, jadi
+database produksi tidak tersentuh. Setiap elemen diperiksa BENAR-BENAR TERLIHAT
+lewat `elementFromPoint`, bukan sekadar ada di DOM (lihat bagian 4).
+
+- Tata letak dan alur (lebar 390, 800, 1024, 1066, 1280): 84/84. Terhadap kode
+  lama, bagian tata letaknya hanya 32/49 - ujinya memang menangkap masalahnya.
+- Data sungguhan (tambah pasien, saringan, cari, ceklis): 8/8.
+- Notifikasi di sidebar (lencana di tab dan tile, daftar, fokus ke kotak, Hapus
+  Semua): 9/9. Notifikasinya diisi lewat pintu uji yang hanya dipasang di
+  salinan, sebab sinkronisasi antarperangkat lewat Firestore diputus.
+- Pemeriksaan tipe dengan `@types/react` sementara: 8 error, sama persis dengan
+  sebelum perubahan. `npm run lint` dan `vite build` lulus.
+
+### Perilaku lama yang ditemukan, TIDAK diubah
+
+- Notifikasi pasien dari perangkat lain hanya menaikkan angka lencana
+  (`App.tsx`, bagian `newRemotePatients`): objek `arrivalNotif` dibuat tetapi
+  tidak pernah dimasukkan ke daftar. Pasien yang ditambah dari perangkat sendiri
+  tidak menaikkan lencana sama sekali. Sama persis di kode lama.
+- Saringan Selesai menampilkan kotak dengan bagian "n Item Selesai" yang
+  terlipat, bukan nama pasiennya langsung.
+- Di layar lebar, butir menu sidebar seperti Database Pasien tidak menutup
+  sidebar (`handleActionClick` hanya menutup di bawah 1024 px).
+
+---
+
 ## Sudah selesai, tinggal catatan
 
 - Kalau suatu hari ada stempel waktu yang disimpan sebagai tipe `Timestamp`
