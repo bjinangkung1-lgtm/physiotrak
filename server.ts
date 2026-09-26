@@ -80,7 +80,7 @@ app.get('/uploads/:filename', async (req, res, next) => {
   try {
     const photoId = filename.replace(/\.[^/.]+$/, ""); // strip extension
     const photoDocRef = doc(serverFirestoreDb, 'irm_photos', photoId);
-    const snap = await getDoc(photoDocRef);
+    const snap = await bacaDoc(photoDocRef);
 
     if (snap.exists()) {
       const data = snap.data() as any;
@@ -1692,7 +1692,7 @@ async function cadangkanTombstoneResetKeFirestore(): Promise<void> {
   try {
     let gabungan = new Set<string>(tombstoneResetPermanen);
     let resetTerbaru = lastResetAtPermanen;
-    const snapshot = await getDoc(RESET_TOMBSTONE_DOC_REF);
+    const snapshot = await bacaDoc(RESET_TOMBSTONE_DOC_REF);
     if (snapshot.exists()) {
       const data: any = snapshot.data();
       if (Array.isArray(data?.ids)) {
@@ -1705,7 +1705,7 @@ async function cadangkanTombstoneResetKeFirestore(): Promise<void> {
       }
     }
     const idsFinal = Array.from(gabungan).slice(-RESET_TOMBSTONE_MAX);
-    await setDoc(RESET_TOMBSTONE_DOC_REF, {
+    await tulisDoc(RESET_TOMBSTONE_DOC_REF, {
       ids: idsFinal,
       lastResetAt: resetTerbaru || null,
       lastMirroredAt: new Date().toISOString(),
@@ -1743,7 +1743,7 @@ function catatTombstoneReset(ids: any[], lastResetAt?: string | null) {
 // berlaku walau disk lokal wadah ini masih kosong.
 async function hydrateResetTombstonesFromFirestoreIfNeeded(): Promise<void> {
   try {
-    const snapshot = await getDoc(RESET_TOMBSTONE_DOC_REF);
+    const snapshot = await bacaDoc(RESET_TOMBSTONE_DOC_REF);
     if (!snapshot.exists()) return;
     const data: any = snapshot.data();
     let bertambah = false;
@@ -1791,7 +1791,7 @@ function cabutTombstoneReset(ids: any[]): number {
 async function tulisUlangTombstoneResetKeFirestore(): Promise<void> {
   if (isFirestoreMirrorDisabled) return;
   try {
-    await setDoc(RESET_TOMBSTONE_DOC_REF, {
+    await tulisDoc(RESET_TOMBSTONE_DOC_REF, {
       ids: Array.from(tombstoneResetPermanen).slice(-RESET_TOMBSTONE_MAX),
       lastResetAt: lastResetAtPermanen || null,
       lastMirroredAt: new Date().toISOString(),
@@ -1980,6 +1980,52 @@ if (needsQuotaRetryScheduleOnBoot) {
 // yang MENUNGGU dicadangkan terlalu lama". Kalau memang tidak ada perubahan,
 // diamnya pencadangan bukan tanda sakit - dan alarm palsu akan membuat petugas
 // belajar mengabaikan peringatan.
+// Setiap panggilan ke Firestore diberi BATAS WAKTU.
+//
+// Ini lahir dari kejadian 26 September 2026. Pencadangan mati total selama 48
+// menit dengan gejala yang mustahil dibaca: tidak pernah berhasil, TAPI JUGA
+// TIDAK PERNAH GAGAL. Tidak ada satu pun pesan kesalahan, karena memang tidak
+// ada kesalahan - panggilannya cuma tidak pernah selesai.
+//
+// Pustaka Firestore tidak punya batas waktu bawaan. Kalau sambungannya tersangkut
+// (jaringan hilang di tengah jalan, kuota habis saat perjalanan pulang), getDoc
+// mengembalikan janji yang tidak pernah ditepati maupun diingkari. Ia menggantung.
+//
+// Yang membuatnya fatal adalah bentuk pencadangan kita sendiri: setiap penulisan
+// WAJIB membaca dulu (baca-gabung-tulis, yang justru kita pasang supaya data tidak
+// saling menimpa). Jadi satu pembacaan yang menggantung memblokir SELURUH
+// pencadangan - antrean, arsip, pasien, ranap - untuk selamanya, diam-diam.
+//
+// Dengan batas waktu, yang menggantung berubah menjadi kegagalan biasa: tercatat,
+// terlihat di tombol merah, dan datanya dikembalikan ke antrean untuk dicoba lagi.
+// Lebih baik gagal keras tiap 15 detik daripada diam sempurna selama sejam.
+const FIRESTORE_BATAS_WAKTU_MS = 15000;
+
+function denganBatasWaktu<T>(kerja: Promise<T>, label: string, batasMs = FIRESTORE_BATAS_WAKTU_MS): Promise<T> {
+  return new Promise<T>((selesai, gagal) => {
+    const jam = setTimeout(() => {
+      gagal(new Error(
+        `Firestore tidak menjawab dalam ${Math.round(batasMs / 1000)} detik (${label})`
+      ));
+    }, batasMs);
+    kerja.then(
+      (hasil) => { clearTimeout(jam); selesai(hasil); },
+      (err) => { clearTimeout(jam); gagal(err); },
+    );
+  });
+}
+
+// Pembungkus tipis supaya tidak ada satu pun panggilan yang lolos tanpa batas waktu.
+//
+// Tipenya sengaja disamakan persis dengan fungsi aslinya (`typeof getDoc` dan
+// seterusnya). Versi pertama memakai `ref: any`, dan akibatnya hasil bacaan kehilangan
+// tipenya - pemeriksa tipe langsung menangkapnya di pembacaan koleksi foto. Dengan
+// cara ini pembungkusnya benar-benar tidak terasa oleh kode pemanggil.
+const bacaDoc = ((ref: any) => denganBatasWaktu(getDoc(ref), 'baca dokumen')) as typeof getDoc;
+const tulisDoc = ((ref: any, data: any) => denganBatasWaktu(setDoc(ref, data), 'tulis dokumen')) as typeof setDoc;
+const bacaKoleksi = ((ref: any) => denganBatasWaktu(getDocs(ref), 'baca koleksi')) as typeof getDocs;
+const hapusDoc = ((ref: any) => denganBatasWaktu(deleteDoc(ref), 'hapus dokumen')) as typeof deleteDoc;
+
 const MIRROR_TERTUNDA_BATAS_MS = 10 * 60 * 1000;
 let mirrorSuksesTerakhirAt: string | null = null;
 let mirrorGagalTerakhirAt: string | null = null;
@@ -2188,7 +2234,7 @@ async function flushQueueStateMirrorNow(): Promise<void> {
     // Baca dulu apa yang SUDAH ada di cadangan awan, lalu gabungkan.
     let cloudState: any = null;
     try {
-      const snapshot = await getDoc(QUEUE_STATE_DOC_REF);
+      const snapshot = await bacaDoc(QUEUE_STATE_DOC_REF);
       if (snapshot.exists()) {
         cloudState = snapshot.data();
       }
@@ -2219,7 +2265,7 @@ async function flushQueueStateMirrorNow(): Promise<void> {
       }
     }
 
-    await setDoc(QUEUE_STATE_DOC_REF, buangUndefined({
+    await tulisDoc(QUEUE_STATE_DOC_REF, buangUndefined({
       ...merged,
       lastMirroredAt: new Date().toISOString(),
     }));
@@ -2312,7 +2358,7 @@ async function mirrorSatuTanggal(dateKey: string, visits: any[]): Promise<boolea
   try {
     let existing: any[] = [];
     try {
-      const snap = await getDoc(dailyArchiveDayDocRef(dateKey));
+      const snap = await bacaDoc(dailyArchiveDayDocRef(dateKey));
       if (snap.exists()) {
         const d = snap.data();
         if (Array.isArray(d?.visits)) existing = d.visits;
@@ -2329,7 +2375,7 @@ async function mirrorSatuTanggal(dateKey: string, visits: any[]): Promise<boolea
       return false;
     }
 
-    await setDoc(dailyArchiveDayDocRef(dateKey), {
+    await tulisDoc(dailyArchiveDayDocRef(dateKey), {
       dateKey,
       visits: JSON.parse(JSON.stringify(gabung)),
       lastMirroredAt: new Date().toISOString(),
@@ -2412,7 +2458,7 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
     // hilang tanpa jejak. Sejak sekarang penulisan hanya boleh MENAMBAH.
     let cloudArchive: any = null;
     try {
-      const snapshot = await getDoc(dailyArchiveMonthDocRef(monthKey));
+      const snapshot = await bacaDoc(dailyArchiveMonthDocRef(monthKey));
       cloudArchive = snapshot.exists() ? snapshot.data()?.archive : null;
     } catch (readErr: any) {
       // Kuota habis pun, data yang menunggu HARUS dikembalikan ke antrean.
@@ -2460,7 +2506,7 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
       if (berhasil) sidikTanggalTercadangkan.set(dateKey, sidik);
     }
 
-    await setDoc(dailyArchiveMonthDocRef(monthKey), buangUndefined({ archive: merged, lastMirroredAt: new Date().toISOString() }));
+    await tulisDoc(dailyArchiveMonthDocRef(monthKey), buangUndefined({ archive: merged, lastMirroredAt: new Date().toISOString() }));
     tandaiMirrorBerhasil(kanalArsip);
 
     // Simpan hasil gabungan ke disk lokal juga (TANPA memicu pencadangan lagi), supaya
@@ -2518,7 +2564,7 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded() {
 
     // 1. Coba pulihkan dari koleksi per-bulan (format baru)
     try {
-      const snapshot = await getDocs(collection(serverFirestoreDb, DAILY_ARCHIVE_MONTHS_COLLECTION));
+      const snapshot = await bacaKoleksi(collection(serverFirestoreDb, DAILY_ARCHIVE_MONTHS_COLLECTION));
       snapshot.forEach((docSnap) => {
         const archive = docSnap.data()?.archive;
         if (archive && typeof archive === 'object' && Object.keys(archive).length > 0) {
@@ -2538,7 +2584,7 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded() {
     // terhadap penulisan yang tidak lengkap, jadi ia yang paling mungkin menyimpan
     // hari-hari terakhir dengan utuh. Digabung, bukan menimpa - sama seperti di atas.
     try {
-      const daySnapshot = await getDocs(collection(serverFirestoreDb, DAILY_ARCHIVE_DAYS_COLLECTION));
+      const daySnapshot = await bacaKoleksi(collection(serverFirestoreDb, DAILY_ARCHIVE_DAYS_COLLECTION));
       const perBulan = new Map<string, Record<string, any[]>>();
       daySnapshot.forEach((docSnap) => {
         const dateKey = docSnap.id;
@@ -2564,7 +2610,7 @@ async function hydrateDailyArchiveFromFirestoreIfNeeded() {
     }
     if (totalDates === 0) {
       try {
-        const legacySnapshot = await getDoc(DAILY_ARCHIVE_DOC_REF);
+        const legacySnapshot = await bacaDoc(DAILY_ARCHIVE_DOC_REF);
         if (legacySnapshot.exists()) {
           const legacyArchive = legacySnapshot.data()?.archive;
           if (legacyArchive && typeof legacyArchive === 'object' && Object.keys(legacyArchive).length > 0) {
@@ -2611,7 +2657,7 @@ async function flushMasterPatientsMirrorNow(): Promise<void> {
 
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
-    await setDoc(MASTER_PATIENTS_DOC_REF, { patients: sanitized, lastMirroredAt: new Date().toISOString() });
+    await tulisDoc(MASTER_PATIENTS_DOC_REF, { patients: sanitized, lastMirroredAt: new Date().toISOString() });
     tandaiMirrorBerhasil('master');
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'MasterPatientsMirror');
@@ -2644,7 +2690,7 @@ async function hydrateMasterPatientsFromFirestoreIfNeeded(): Promise<void> {
         if (Array.isArray(raw) && raw.length > 0) return;
       } catch {}
     }
-    const snapshot = await getDoc(MASTER_PATIENTS_DOC_REF);
+    const snapshot = await bacaDoc(MASTER_PATIENTS_DOC_REF);
     if (!snapshot.exists()) return;
     const cloudPatients = snapshot.data()?.patients;
     if (Array.isArray(cloudPatients) && cloudPatients.length > 0) {
@@ -2680,7 +2726,7 @@ async function flushRanapHistoryMirrorNow(): Promise<void> {
 
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
-    await setDoc(RANAP_HISTORY_DOC_REF, { history: sanitized, lastMirroredAt: new Date().toISOString() });
+    await tulisDoc(RANAP_HISTORY_DOC_REF, { history: sanitized, lastMirroredAt: new Date().toISOString() });
     tandaiMirrorBerhasil('ranap');
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'RanapHistoryMirror');
@@ -2713,7 +2759,7 @@ async function hydrateRanapHistoryFromFirestoreIfNeeded(): Promise<void> {
         if (Array.isArray(raw) && raw.length > 0) return;
       } catch {}
     }
-    const snapshot = await getDoc(RANAP_HISTORY_DOC_REF);
+    const snapshot = await bacaDoc(RANAP_HISTORY_DOC_REF);
     if (!snapshot.exists()) return;
     const cloudHistory = snapshot.data()?.history;
     if (Array.isArray(cloudHistory) && cloudHistory.length > 0) {
@@ -2745,7 +2791,7 @@ async function hydrateStateFromFirestoreIfNeeded(): Promise<void> {
       }
     }
 
-    const snapshot = await getDoc(QUEUE_STATE_DOC_REF);
+    const snapshot = await bacaDoc(QUEUE_STATE_DOC_REF);
     if (!snapshot.exists()) {
       return;
     }
@@ -2837,7 +2883,7 @@ function startPeriodicFirestoreSync() {
   setInterval(async () => {
     try {
       if (isFirestoreMirrorDisabled) return;
-      const snapshot = await getDoc(QUEUE_STATE_DOC_REF);
+      const snapshot = await bacaDoc(QUEUE_STATE_DOC_REF);
       if (!snapshot.exists()) return;
       const cloudState = snapshot.data();
       if (!cloudState || (!Array.isArray(cloudState.boxes) && !Array.isArray(cloudState.patients))) return;
@@ -4651,7 +4697,10 @@ function saveBase64ImageToDisk(imageData: string, meta: {
       const mimeType = extension === 'png' ? 'image/png' : extension === 'svg' ? 'image/svg+xml' : 'image/jpeg';
       const fullDataUrl = `data:${mimeType};base64,${base64Data}`;
       const photoDocRef = doc(serverFirestoreDb, 'irm_photos', id);
-      setDoc(photoDocRef, {
+      // Anggaran waktu sendiri, jauh lebih longgar: isinya foto ber-base64 yang bisa
+      // besar, dan wifi rumah sakit sering lambat. Batas 15 detik di sini malah akan
+      // menggagalkan unggahan yang sebenarnya baik-baik saja.
+      denganBatasWaktu(setDoc(photoDocRef, {
         id,
         url: publicUrl,
         filename,
@@ -4666,7 +4715,7 @@ function saveBase64ImageToDisk(imageData: string, meta: {
         photoType: photoRecord.photoType,
         size: buffer.length,
         uploadedAt: photoRecord.uploadedAt,
-      }).catch((e) => console.warn('[FirestorePhoto] Gagal menyimpan ke irm_photos:', e?.message || e));
+      }), 'tulis foto', 60000).catch((e) => console.warn('[FirestorePhoto] Gagal menyimpan ke irm_photos:', e?.message || e));
     } catch (err) {
       console.warn('[FirestorePhoto] Gagal menyiapkan photo doc ref:', err);
     }
@@ -4738,7 +4787,7 @@ app.get('/api/photos', async (req, res) => {
     if (photos.length === 0 && !isFirestoreMirrorDisabled) {
       try {
         const colRef = collection(serverFirestoreDb, 'irm_photos');
-        const snap = await getDocs(colRef);
+        const snap = await bacaKoleksi(colRef);
         const cloudPhotos: any[] = [];
         snap.forEach((d) => {
           if (d.exists()) {
@@ -4794,7 +4843,7 @@ app.delete('/api/photos/:id', async (req, res) => {
       // Delete from Cloud Firestore irm_photos
       try {
         const photoDocRef = doc(serverFirestoreDb, 'irm_photos', photoToDelete.id);
-        await deleteDoc(photoDocRef);
+        await hapusDoc(photoDocRef);
       } catch (delErr) {
         console.warn('[FirestorePhotoDelete] Gagal menghapus dari Cloud Firestore:', delErr);
       }

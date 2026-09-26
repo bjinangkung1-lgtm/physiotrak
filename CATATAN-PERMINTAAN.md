@@ -357,3 +357,32 @@ agar tetap berada pada hari WIB yang sama dengan tanggal arsip yang diuji.
 - Membersihkan baris ganda di dua tanggal (perlu cadangan dan persetujuan dulu).
 - Mengarsipkan riwayat log panggilan sebelum dibersihkan.
 - 28 baris data uji yang masih tersisa di register 20 September.
+
+## 26 September 2026 - Pencadangan mati total: panggilan Firestore yang menggantung
+
+**Gejala yang mustahil dibaca:** `/api/system/status` melaporkan
+`mirrorHealthy:false`, `mirrorPendingMinutes:48`, tetapi
+`lastMirrorSuccessAt:null` **dan** `lastMirrorErrorAt:null`.
+Tidak pernah berhasil, tapi juga tidak pernah gagal.
+
+**Akar masalah:** pustaka Firestore tidak punya batas waktu bawaan. Kalau
+sambungan tersangkut, `getDoc` mengembalikan janji yang tidak pernah ditepati
+maupun diingkari - ia menggantung. Karena setiap penulisan wajib membaca dulu
+(baca-gabung-tulis, yang justru dipasang untuk melindungi data), satu pembacaan
+yang menggantung memblokir SELURUH pencadangan - antrean, arsip, pasien, ranap -
+selamanya dan tanpa suara.
+
+**Perbaikan:** semua 22 panggilan Firestore dibungkus batas waktu 15 detik
+(`denganBatasWaktu` + `bacaDoc`/`tulisDoc`/`bacaKoleksi`/`hapusDoc`). Penulisan
+foto diberi anggaran sendiri 60 detik karena isinya besar dan wifi rumah sakit
+sering lambat - batas 15 detik di sana justru akan menggagalkan unggahan yang sehat.
+
+**Pelajaran uji:** dua harness lama memanggil `getDoc` langsung dan jadi
+tertinggal setelah nama pemanggilnya berubah, sehingga `uji_kuota_arsip` jatuh
+ke 4/6. Itu lubang harness, BUKAN regresi - terbukti setelah harness-nya diajari
+mengambil `const` panah dari sumber asli, kembali 6/6. Pemeriksa tipe juga
+menangkap versi pertama pembungkus yang memakai `ref: any` dan menghapus tipe
+hasil bacaan; tanda tangannya kini disamakan dengan fungsi asli (`typeof getDoc`).
+
+**Catatan penting:** selama arsip awan belum menerima 25 dan 26 September,
+JANGAN bersihkan antrean. Papan antrean adalah satu-satunya jalan pulang data itu.
