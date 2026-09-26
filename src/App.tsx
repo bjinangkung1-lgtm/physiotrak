@@ -2691,29 +2691,32 @@ export default function App() {
         overloadCount={overloadedTherapistsCount}
       />
 
-      {/* Peringatan pencadangan bermasalah. SENGAJA tidak bisa ditutup: selama ini
-          berlangsung, setiap perubahan berjalan tanpa salinan cadangan. */}
-      {pencadanganBermasalah && (
-        <div className="sticky top-0 z-[70] bg-gradient-to-r from-rose-700 via-rose-600 to-rose-700 text-white px-4 py-2.5 shadow-lg border-b-2 border-rose-900">
-          <div className="flex items-start gap-3 max-w-[1800px] mx-auto">
-            <span className="text-xl leading-none mt-0.5 shrink-0">&#9888;</span>
-            <div className="min-w-0 flex-1">
-              <div className="font-extrabold text-sm sm:text-base leading-snug">
-                PENCADANGAN TIDAK BERJALAN &mdash; sudah {pencadanganBermasalah.menit} menit
-              </div>
-              <div className="text-[12px] sm:text-xs text-rose-50/95 mt-0.5 leading-relaxed">
-                Data yang masuk sejak tadi <b>belum punya salinan</b>. Segera buka Database Harian
-                lalu tekan <b>Backup Lengkap</b> dan simpan berkasnya.
-                {pencadanganBermasalah.sebab ? (
-                  <span className="block mt-0.5 font-mono text-[10px] text-rose-100/80 break-all">
-                    {pencadanganBermasalah.sebab}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Peringatan pencadangan tertunda.
+          Dibuat KECIL dan tenang dengan sengaja. Spanduk merah selebar layar membuat
+          terapis cemas padahal mereka tidak bisa berbuat apa-apa soal pencadangan -
+          dan peringatan yang menakutkan tanpa bisa ditindaklanjuti justru cepat
+          diabaikan. Merah hanya dipakai setelah setengah jam, saat memang pantas
+          mengganggu. */}
+      {pencadanganBermasalah && (() => {
+        const mendesak = pencadanganBermasalah.menit >= 30;
+        return (
+          <button
+            type="button"
+            onClick={() => setIsDailyDatabaseOpen(true)}
+            title={`Cadangan terakhir belum tersimpan sejak ${pencadanganBermasalah.menit} menit lalu. Tekan untuk membuka Database Harian dan menyimpan cadangan.${pencadanganBermasalah.sebab ? '\n\n' + pencadanganBermasalah.sebab : ''}`}
+            className={`fixed right-3 z-[70] flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-bold shadow-lg border cursor-pointer transition-colors ${
+              mendesak
+                ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-800'
+                : 'bg-amber-100 hover:bg-amber-200 text-amber-900 border-amber-400'
+            }`}
+            style={{ top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)' }}
+          >
+            <span aria-hidden="true">{mendesak ? '\u26A0' : '\u23F3'}</span>
+            <span>Cadangan tertunda {pencadanganBermasalah.menit}m</span>
+            <span className={`px-1.5 py-0.5 rounded-full ${mendesak ? 'bg-white/25' : 'bg-amber-800/15'}`}>Simpan</span>
+          </button>
+        );
+      })()}
 
       {/* Top Header */}
       <Header

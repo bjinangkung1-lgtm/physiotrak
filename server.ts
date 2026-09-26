@@ -1984,14 +1984,26 @@ const MIRROR_TERTUNDA_BATAS_MS = 10 * 60 * 1000;
 let mirrorSuksesTerakhirAt: string | null = null;
 let mirrorGagalTerakhirAt: string | null = null;
 let mirrorGagalTerakhirPesan: string | null = null;
-let mirrorTertundaSejak: number | null = null;
 
-function tandaiMirrorTertunda() {
-  if (mirrorTertundaSejak === null) mirrorTertundaSejak = Date.now();
+// Ditandai PER KANAL, bukan satu tanda untuk semuanya.
+//
+// Versi pertama menandai "tertunda" di baris pertama setiap fungsi pencadangan.
+// Padahal fungsi-fungsi itu punya beberapa jalan keluar lebih awal yang sah -
+// misalnya tidak ada riwayat ranap sama sekali - dan tanda itu tidak pernah
+// dibersihkan, sehingga peringatan muncul walau papan sebenarnya tercadangkan.
+// Peringatan palsu melatih orang mengabaikan peringatan, jadi ini harus tepat.
+const mirrorTertundaKanal = new Map<string, number>();
+
+function tandaiMirrorTertunda(kanal: string) {
+  if (!mirrorTertundaKanal.has(kanal)) mirrorTertundaKanal.set(kanal, Date.now());
 }
-function tandaiMirrorBerhasil() {
+// Dipanggil kalau kanal ini memang TIDAK punya apa-apa untuk dicadangkan.
+function tandaiMirrorBeres(kanal: string) {
+  mirrorTertundaKanal.delete(kanal);
+}
+function tandaiMirrorBerhasil(kanal: string) {
+  mirrorTertundaKanal.delete(kanal);
   mirrorSuksesTerakhirAt = new Date().toISOString();
-  mirrorTertundaSejak = null;
   mirrorGagalTerakhirPesan = null;
 }
 function tandaiMirrorGagal(err: any, label: string) {
@@ -1999,7 +2011,11 @@ function tandaiMirrorGagal(err: any, label: string) {
   mirrorGagalTerakhirPesan = `[${label}] ${(err && err.message) || String(err)}`.slice(0, 300);
 }
 function keadaanMirror() {
-  const tertundaMs = mirrorTertundaSejak === null ? 0 : Date.now() - mirrorTertundaSejak;
+  let tertundaMs = 0;
+  const sekarang = Date.now();
+  for (const sejak of mirrorTertundaKanal.values()) {
+    tertundaMs = Math.max(tertundaMs, sekarang - sejak);
+  }
   return {
     mirrorHealthy: !isFirestoreMirrorDisabled && tertundaMs < MIRROR_TERTUNDA_BATAS_MS,
     mirrorPendingMinutes: Math.floor(tertundaMs / 60000),
@@ -2151,7 +2167,8 @@ let mirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingMirrorState: any = null;
 
 async function flushQueueStateMirrorNow(): Promise<void> {
-  tandaiMirrorTertunda();
+  // Ditandai hanya kalau memang ADA yang menunggu dicadangkan.
+  if (pendingMirrorState) tandaiMirrorTertunda('antrean'); else tandaiMirrorBeres('antrean');
   if (mirrorDebounceTimer) {
     clearTimeout(mirrorDebounceTimer);
     mirrorDebounceTimer = null;
@@ -2206,7 +2223,7 @@ async function flushQueueStateMirrorNow(): Promise<void> {
       ...merged,
       lastMirroredAt: new Date().toISOString(),
     }));
-    tandaiMirrorBerhasil();
+    tandaiMirrorBerhasil('antrean');
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'FirestoreMirror');
   }
@@ -2355,7 +2372,8 @@ function mergeArchiveMonths(base: any, incoming: any): Record<string, any[]> {
 }
 
 async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
-  tandaiMirrorTertunda();
+  const kanalArsip = `arsip:${monthKey}`;
+  if (pendingDailyArchiveMirrors.get(monthKey)) tandaiMirrorTertunda(kanalArsip); else tandaiMirrorBeres(kanalArsip);
   const existingTimer = dailyArchiveMirrorDebounceTimers.get(monthKey);
   if (existingTimer) clearTimeout(existingTimer);
   dailyArchiveMirrorDebounceTimers.delete(monthKey);
@@ -2397,8 +2415,14 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
       const snapshot = await getDoc(dailyArchiveMonthDocRef(monthKey));
       cloudArchive = snapshot.exists() ? snapshot.data()?.archive : null;
     } catch (readErr: any) {
-      if (handleFirestoreQuotaError(readErr, 'DailyArchiveMirror-Read')) return;
-      tundaDanCobaLagi('Tidak bisa membaca cadangan yang sekarang');
+      // Kuota habis pun, data yang menunggu HARUS dikembalikan ke antrean.
+      //
+      // Dulu di sini langsung `return` - padahal antreannya sudah dihapus di atas,
+      // sehingga arsip yang menunggu hilang begitu saja dan tidak pernah ditulis
+      // lagi. Itulah sebabnya register 25 September 2026 tidak pernah sampai ke
+      // awan, dan kehilangan hari itu tidak punya jaring pengaman sama sekali.
+      const kuota = handleFirestoreQuotaError(readErr, 'DailyArchiveMirror-Read');
+      tundaDanCobaLagi(kuota ? 'Kuota Firestore habis saat membaca cadangan' : 'Tidak bisa membaca cadangan yang sekarang');
       return;
     }
 
@@ -2437,7 +2461,7 @@ async function flushArchiveMonthMirrorNow(monthKey: string): Promise<void> {
     }
 
     await setDoc(dailyArchiveMonthDocRef(monthKey), buangUndefined({ archive: merged, lastMirroredAt: new Date().toISOString() }));
-    tandaiMirrorBerhasil();
+    tandaiMirrorBerhasil(kanalArsip);
 
     // Simpan hasil gabungan ke disk lokal juga (TANPA memicu pencadangan lagi), supaya
     // instance yang tadinya datanya belum lengkap ikut lengkap setelah satu putaran.
@@ -2571,7 +2595,7 @@ let masterPatientsMirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingMasterPatientsMirror: any[] | null = null;
 
 async function flushMasterPatientsMirrorNow(): Promise<void> {
-  tandaiMirrorTertunda();
+  if (pendingMasterPatientsMirror) tandaiMirrorTertunda('master'); else tandaiMirrorBeres('master');
   if (masterPatientsMirrorDebounceTimer) {
     clearTimeout(masterPatientsMirrorDebounceTimer);
     masterPatientsMirrorDebounceTimer = null;
@@ -2588,7 +2612,7 @@ async function flushMasterPatientsMirrorNow(): Promise<void> {
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
     await setDoc(MASTER_PATIENTS_DOC_REF, { patients: sanitized, lastMirroredAt: new Date().toISOString() });
-    tandaiMirrorBerhasil();
+    tandaiMirrorBerhasil('master');
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'MasterPatientsMirror');
   }
@@ -2640,7 +2664,7 @@ let ranapHistoryMirrorMaxWaitTimer: NodeJS.Timeout | null = null;
 let pendingRanapHistoryMirror: any[] | null = null;
 
 async function flushRanapHistoryMirrorNow(): Promise<void> {
-  tandaiMirrorTertunda();
+  if (pendingRanapHistoryMirror) tandaiMirrorTertunda('ranap'); else tandaiMirrorBeres('ranap');
   if (ranapHistoryMirrorDebounceTimer) {
     clearTimeout(ranapHistoryMirrorDebounceTimer);
     ranapHistoryMirrorDebounceTimer = null;
@@ -2657,7 +2681,7 @@ async function flushRanapHistoryMirrorNow(): Promise<void> {
   try {
     const sanitized = JSON.parse(JSON.stringify(current));
     await setDoc(RANAP_HISTORY_DOC_REF, { history: sanitized, lastMirroredAt: new Date().toISOString() });
-    tandaiMirrorBerhasil();
+    tandaiMirrorBerhasil('ranap');
   } catch (err: any) {
     handleFirestoreQuotaError(err, 'RanapHistoryMirror');
   }
@@ -5150,9 +5174,13 @@ async function flushPendingFirestoreMirrors(): Promise<void> {
   dailyArchiveMirrorDebounceTimers.clear();
   for (const timer of dailyArchiveMirrorMaxWaitTimers.values()) clearTimeout(timer);
   dailyArchiveMirrorMaxWaitTimers.clear();
-  if (isFirestoreMirrorDisabled) {
-    pendingDailyArchiveMirrors.clear();
-  }
+  // JANGAN mengosongkan pendingDailyArchiveMirrors di sini.
+  //
+  // Dulu baris ini membuang seluruh arsip yang sedang menunggu setiap kali
+  // pencadangan dimatikan karena kuota. Akibatnya, begitu jeda kuota selesai,
+  // tidak ada lagi yang tersisa untuk dikirim - arsipnya hilang diam-diam.
+  // Sekarang data itu dipertahankan supaya scheduleFirestoreQuotaRetry bisa
+  // mengirimnya setelah kuota pulih.
 
   // 3. Master Patients
   if (pendingMasterPatientsMirror && !isFirestoreMirrorDisabled) {
