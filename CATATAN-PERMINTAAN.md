@@ -386,3 +386,35 @@ hasil bacaan; tanda tangannya kini disamakan dengan fungsi asli (`typeof getDoc`
 
 **Catatan penting:** selama arsip awan belum menerima 25 dan 26 September,
 JANGAN bersihkan antrean. Papan antrean adalah satu-satunya jalan pulang data itu.
+
+## 26 September 2026 (lanjutan) - Klien Firestore tersangkut offline
+
+Setelah batas waktu dipasang, status akhirnya berbicara:
+`[DailyArchiveDay] Firestore tidak menjawab dalam 15 detik (tulis dokumen)`.
+Yang menggantung ternyata PENULISAN, bukan pembacaan.
+
+**Dibuktikan di sandbox** dengan proyek yang sengaja tidak bisa dihubungi:
+getDoc gagal dalam 655 ms ("client is offline"), setDoc masih menggantung setelah
+20 detik. Itu perilaku Firestore yang memang begitu - penulisan saat offline diantre
+di memori dan janjinya baru ditepati kalau server menjawab. Bahayanya: pembacaan
+masih dilayani dari cache seolah-olah sehat, sementara semua penulisan mati.
+
+**Kenapa bisa offline:** server.ts memakai SDK Firestore versi WEB di dalam Node.
+Transport bawaannya (WebChannel) sering gagal terbentuk di lingkungan
+server/serverless di balik proksi.
+
+**Dua perbaikan:**
+1. Pencegahan - `initializeFirestore` dengan `experimentalAutoDetectLongPolling`,
+   dibungkus try/catch yang jatuh kembali ke `getFirestore` kalau sudah pernah
+   diinisialisasi. autoDetect dipilih, bukan force: kalau WebChannel bisa dipakai,
+   biarkan dipakai.
+2. Pemulihan - setelah 2 kali kehabisan waktu BERTURUT-TURUT, `disableNetwork()`
+   lalu `enableNetwork()` memaksa sambungan dibangun ulang. Antrean penulisan tidak
+   dibuang; klien mengirimnya ulang setelah tersambung. Kuota habis TIDAK memicu ini
+   (itu bukan urusan sambungan), dan kegagalan jenis lain mengulang hitungan ke nol.
+
+Status kini juga menampilkan `firestoreSambungUlangTerakhirAt` dan
+`firestoreGagalWaktuHabisBeruntun`, supaya upaya pemulihan bisa dilihat, bukan diduga.
+
+**Pelajaran:** batas waktu saja belum cukup. Tanpa penyambungan ulang, kita hanya
+berpindah dari diam selamanya menjadi gagal selamanya.

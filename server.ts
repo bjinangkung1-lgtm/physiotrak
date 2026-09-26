@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, getDoc, setDoc, collection, getDocs, deleteDoc, setLogLevel } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, enableNetwork, disableNetwork, doc, getDoc, setDoc, collection, getDocs, deleteDoc, setLogLevel } from 'firebase/firestore';
 import firebaseConfig from './firebase-applet-config.json';
 
 // Suppress Firestore SDK internal logs during network/quota incidents
@@ -24,7 +24,35 @@ const firebaseServerApp = !getApps().length ? initializeApp(firebaseConfig as an
 const firestoreDatabaseId = (firebaseConfig as any).firestoreDatabaseId && (firebaseConfig as any).firestoreDatabaseId !== '(default)'
   ? (firebaseConfig as any).firestoreDatabaseId
   : undefined;
-const serverFirestoreDb = getFirestore(firebaseServerApp, firestoreDatabaseId);
+// Dipaksa mendeteksi long-polling, bukan langsung memakai WebChannel.
+//
+// Ini SDK Firestore versi web yang dijalankan di dalam server Node. Transport
+// bawaannya (WebChannel) sering gagal terbentuk di lingkungan server/serverless yang
+// berada di balik proksi. Kalau itu terjadi, kliennya masuk ke keadaan "offline" -
+// dan di situlah letak bahayanya: pembacaan masih dilayani dari cache seolah-olah
+// sehat, sementara SETIAP PENULISAN menggantung selamanya. Itu perilaku Firestore
+// yang memang begitu, bukan kerusakan: penulisan saat offline diantre di memori dan
+// janjinya baru ditepati kalau server menjawab.
+//
+// Terbukti di sandbox 26 September 2026 dengan proyek yang sengaja tidak bisa
+// dihubungi: getDoc gagal dalam 655 ms, setDoc masih menggantung setelah 20 detik.
+// Itu persis gejala di lapangan.
+//
+// autoDetect dipilih, bukan force: kalau WebChannel memang bisa dipakai, biarkan
+// dipakai. Kita hanya ingin ada jalan mundur, bukan mengganti yang sudah jalan.
+const serverFirestoreDb = (() => {
+  try {
+    return initializeFirestore(
+      firebaseServerApp,
+      { experimentalAutoDetectLongPolling: true },
+      firestoreDatabaseId,
+    );
+  } catch (err) {
+    // Sudah pernah diinisialisasi (mis. modul dimuat ulang saat pengembangan).
+    // Jangan sampai ini menggagalkan server - ambil saja yang sudah ada.
+    return getFirestore(firebaseServerApp, firestoreDatabaseId);
+  }
+})();
 const QUEUE_STATE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'current_queue');
 const DAILY_ARCHIVE_DOC_REF = doc(serverFirestoreDb, 'system_state', 'daily_archive');
 const MASTER_PATIENTS_DOC_REF = doc(serverFirestoreDb, 'system_state', 'master_patients');
@@ -2048,6 +2076,7 @@ function tandaiMirrorBeres(kanal: string) {
   mirrorTertundaKanal.delete(kanal);
 }
 function tandaiMirrorBerhasil(kanal: string) {
+  gagalWaktuHabisBeruntun = 0;
   mirrorTertundaKanal.delete(kanal);
   mirrorSuksesTerakhirAt = new Date().toISOString();
   mirrorGagalTerakhirPesan = null;
@@ -2065,15 +2094,63 @@ function keadaanMirror() {
   return {
     mirrorHealthy: !isFirestoreMirrorDisabled && tertundaMs < MIRROR_TERTUNDA_BATAS_MS,
     mirrorPendingMinutes: Math.floor(tertundaMs / 60000),
+    // Ditampilkan supaya kalau klien tersangkut lagi, terlihat apakah upaya
+    // menyambung ulang memang berjalan - bukan sekadar dugaan.
+    firestoreSambungUlangTerakhirAt: sambungUlangTerakhirAt,
+    firestoreGagalWaktuHabisBeruntun: gagalWaktuHabisBeruntun,
     lastMirrorSuccessAt: mirrorSuksesTerakhirAt,
     lastMirrorErrorAt: mirrorGagalTerakhirAt,
     lastMirrorError: mirrorGagalTerakhirPesan,
   };
 }
 
+// Menyambungkan ulang klien yang tersangkut "offline".
+//
+// Batas waktu saja belum cukup. Kalau kliennya tersangkut, percobaan berikutnya ikut
+// menggantung juga - kita cuma berganti dari diam selamanya menjadi gagal selamanya.
+// Yang perlu diperbaiki keadaan kliennya, bukan sekadar dilaporkan.
+//
+// disableNetwork() lalu enableNetwork() memaksa Firestore membuang sambungan yang
+// mati dan membangunnya dari awal. Penulisan yang sedang diantre TIDAK dibuang -
+// antreannya tetap dipegang klien dan dikirim ulang setelah tersambung.
+const GAGAL_SEBELUM_SAMBUNG_ULANG = 2;
+let gagalWaktuHabisBeruntun = 0;
+let sedangMenyambungUlang = false;
+let sambungUlangTerakhirAt: string | null = null;
+
+async function sambungUlangFirestore(label: string): Promise<void> {
+  if (sedangMenyambungUlang) return;
+  sedangMenyambungUlang = true;
+  try {
+    console.warn(`[${label}] Klien Firestore tampaknya tersangkut offline - menyambung ulang.`);
+    await disableNetwork(serverFirestoreDb);
+    await enableNetwork(serverFirestoreDb);
+    sambungUlangTerakhirAt = new Date().toISOString();
+    gagalWaktuHabisBeruntun = 0;
+    console.warn(`[${label}] Sambungan Firestore dibangun ulang.`);
+  } catch (err: any) {
+    // Gagal menyambung ulang tidak boleh menjatuhkan server. Hitungannya dibiarkan
+    // tinggi supaya percobaan berikutnya mencoba lagi.
+    console.warn(`[${label}] Gagal menyambung ulang Firestore:`, (err && err.message) || err);
+  } finally {
+    sedangMenyambungUlang = false;
+  }
+}
+
 function handleFirestoreQuotaError(err: any, label: string): boolean {
   tandaiMirrorGagal(err, label);
   const errMsg = err?.message || String(err);
+
+  // Kehabisan waktu berturut-turut = kliennya yang sakit, bukan satu panggilan yang sial.
+  if (errMsg.includes('tidak menjawab dalam')) {
+    gagalWaktuHabisBeruntun += 1;
+    if (gagalWaktuHabisBeruntun >= GAGAL_SEBELUM_SAMBUNG_ULANG) {
+      void sambungUlangFirestore(label);
+    }
+  } else {
+    gagalWaktuHabisBeruntun = 0;
+  }
+
   const isQuotaError =
     errMsg.includes('RESOURCE_EXHAUSTED') ||
     errMsg.includes('Quota exceeded') ||
