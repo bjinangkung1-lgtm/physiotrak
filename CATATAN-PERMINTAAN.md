@@ -234,14 +234,29 @@ Data yang hilang TIDAK dapat dipulihkan.
 - `firestoreMirrorDisabled: false` - tetapi itu server BARU. Penanda kuota
   disimpan di disk dan ikut hilang.
 
-### Penyebab
+### Penyebab - DIPASTIKAN 26 September (commit 1b910a7)
 
-Dugaan terkuat: kuota Firestore bersama (AI Studio Starter Tier) habis pukul 13.51.
-Tidak dapat dibuktikan karena penandanya hilang bersama disk.
+Pemicunya kuota Firestore bersama yang habis. Tetapi cacat yang membuatnya berakibat
+fatal ada di kode, dan sudah ditemukan:
 
-**Cacat yang sebenarnya bukan kuotanya**, melainkan: disk server bersifat sementara,
-sehingga satu-satunya penyimpanan yang bertahan adalah awan. Begitu jalur ke awan
-tertutup, tidak ada perlindungan apa pun - dan keadaan itu berlangsung senyap.
+**Dua tempat MEMBUANG arsip yang sedang menunggu dicadangkan.**
+
+1. `flushPendingFirestoreMirrors()` memanggil `pendingDailyArchiveMirrors.clear()`
+   setiap kali pencadangan dimatikan karena kuota. Seluruh antrean arsip dibuang,
+   sehingga ketika jeda kuota berakhir tidak ada lagi yang tersisa untuk dikirim.
+2. `flushArchiveMonthMirrorNow()` langsung `return` saat kuota habis ketika MEMBACA
+   cadangan - padahal antreannya sudah dihapus beberapa baris di atas.
+
+Akibatnya arsip harian berhenti tercadangkan sejak **24 September 14.02 WIB**.
+Register 25 September (60 kunjungan) TIDAK PERNAH sampai ke awan sama sekali. Karena
+itulah kehilangan 23 kunjungan hari itu tidak punya jaring pengaman apa pun.
+
+Diperbaiki: data yang menunggu selalu dikembalikan ke antrean, dan antrean arsip tidak
+pernah dikosongkan hanya karena pencadangan sedang dijeda.
+
+**Cacat lapis kedua**: disk server bersifat sementara, sehingga satu-satunya
+penyimpanan yang bertahan adalah awan. Ini belum tertutup, dan hanya hilang setelah
+pindah ke server dengan penyimpanan permanen.
 
 ### Yang sudah dipasang
 
@@ -253,6 +268,25 @@ tertutup, tidak ada perlindungan apa pun - dan keadaan itu berlangsung senyap.
    membaca peringatan.
 2. **Pemulihan menggabungkan, bukan menimpa.** `/api/backup/restore` dulu mengganti
    seluruh arsip; memulihkan cadangan lama akan menghapus catatan yang lebih baru.
+
+### Peringatan palsu yang sempat saya buat sendiri
+
+Versi pertama penanda "tertunda" dipasang di baris pertama keempat fungsi
+pencadangan. Semuanya punya jalan keluar lebih awal yang sah - misalnya tidak ada
+riwayat ranap - dan tandanya tidak pernah dibersihkan, sehingga peringatan bisa
+muncul walau papan tercadangkan baik-baik saja.
+
+Diperbaiki: ditandai PER KANAL, hanya kalau memang ada yang menunggu.
+
+Pelajarannya: peringatan palsu melatih orang mengabaikan peringatan. Untuk sesuatu
+yang dipasang justru agar dipercaya, ketepatan lebih penting daripada kepekaan.
+
+### Tampilan peringatan
+
+Spanduk merah selebar layar diganti tombol kecil di pojok kanan atas - kuning dan
+tenang, berubah merah hanya setelah 30 menit. Alasannya: terapis melihat papan
+sepanjang hari tetapi tidak bisa berbuat apa-apa soal pencadangan, dan peringatan
+menakutkan yang tidak bisa ditindaklanjuti cepat diabaikan.
 
 ### Yang BELUM tertutup
 
