@@ -2114,12 +2114,17 @@ function keadaanMirror() {
 // mati dan membangunnya dari awal. Penulisan yang sedang diantre TIDAK dibuang -
 // antreannya tetap dipegang klien dan dikirim ulang setelah tersambung.
 const GAGAL_SEBELUM_SAMBUNG_ULANG = 2;
+const SAMBUNG_ULANG_JEDA_MS = 60 * 1000;
 let gagalWaktuHabisBeruntun = 0;
 let sedangMenyambungUlang = false;
 let sambungUlangTerakhirAt: string | null = null;
 
 async function sambungUlangFirestore(label: string): Promise<void> {
   if (sedangMenyambungUlang) return;
+  // Jeda minimum. Klien yang tersangkut menghasilkan kegagalan bertubi-tubi, dan
+  // tanpa jeda ini kita akan membongkar-pasang sambungan terus-menerus - yang justru
+  // membuatnya tidak pernah sempat tersambung.
+  if (sambungUlangTerakhirAt && Date.now() - new Date(sambungUlangTerakhirAt).getTime() < SAMBUNG_ULANG_JEDA_MS) return;
   sedangMenyambungUlang = true;
   try {
     console.warn(`[${label}] Klien Firestore tampaknya tersangkut offline - menyambung ulang.`);
@@ -2141,14 +2146,29 @@ function handleFirestoreQuotaError(err: any, label: string): boolean {
   tandaiMirrorGagal(err, label);
   const errMsg = err?.message || String(err);
 
-  // Kehabisan waktu berturut-turut = kliennya yang sakit, bukan satu panggilan yang sial.
-  if (errMsg.includes('tidak menjawab dalam')) {
+  // Gejala sambungan sakit, bukan sekadar satu panggilan yang sial.
+  //
+  // Versi pertama hanya menghitung kehabisan waktu, dan MENOLKAN hitungan pada
+  // kegagalan jenis lain. Di server sungguhan itu tidak pernah bekerja: klien yang
+  // tersangkut menghasilkan campuran - pembacaan gagal cepat dengan "client is
+  // offline" sementara penulisan kehabisan waktu. Terlihat di sandbox 26 September
+  // 2026: 11 kegagalan "client is offline" menyela di antara 2 kehabisan waktu,
+  // sehingga ambangnya tidak pernah tercapai dan penyambungan ulang tidak pernah
+  // jalan sama sekali.
+  //
+  // Keduanya gejala penyakit yang SAMA, jadi keduanya dihitung. Yang menolkan
+  // hitungan hanya KEBERHASILAN sungguhan (lihat tandaiMirrorBerhasil). Kegagalan
+  // jenis lain - kuota habis, izin ditolak - tidak menaikkan maupun menolkan,
+  // karena itu bukan urusan sambungan.
+  const gejalaSambunganSakit =
+    errMsg.includes('tidak menjawab dalam') ||
+    errMsg.includes('client is offline') ||
+    err?.code === 'unavailable';
+  if (gejalaSambunganSakit) {
     gagalWaktuHabisBeruntun += 1;
     if (gagalWaktuHabisBeruntun >= GAGAL_SEBELUM_SAMBUNG_ULANG) {
       void sambungUlangFirestore(label);
     }
-  } else {
-    gagalWaktuHabisBeruntun = 0;
   }
 
   const isQuotaError =
@@ -3598,6 +3618,64 @@ app.get('/api/system/status', (req, res) => {
   // firestoreMirrorDisabled saja TIDAK cukup - penanda itu hanya menyala untuk
   // kegagalan kuota. keadaanMirror() melaporkan keadaan yang sebenarnya.
   res.json({ status: 'ok', firestoreMirrorDisabled: isFirestoreMirrorDisabled, ...keadaanMirror() });
+});
+
+// GET diagnosa pencadangan - membuktikan, bukan menduga.
+//
+// Status biasa hanya melaporkan apa yang SUDAH terjadi. Kalau wadah baru saja
+// dimulai dan belum ada perubahan data, semuanya nol dan null: tidak pernah
+// berhasil, tidak pernah gagal, tidak ada yang menunggu. Keadaan itu tidak bisa
+// dibedakan dari "sudah sembuh" maupun "masih rusak", dan menunggu tidak menolong
+// karena tidak ada yang memicu penulisan.
+//
+// Alamat ini memancing satu penulisan sungguhan lalu melaporkan hasilnya.
+app.get('/api/system/uji-cadangan', async (req, res) => {
+  const hasil: any = { status: 'ok' };
+
+  // 1. Penulisan percobaan ke dokumen khusus uji.
+  //
+  // SENGAJA tidak menyentuh data pasien sama sekali. Kalau sambungan sedang sakit,
+  // percobaan ini yang kena, bukan register kunjungan.
+  const mulai = Date.now();
+  try {
+    await tulisDoc(doc(serverFirestoreDb, 'system_state', 'uji_sambungan'), {
+      at: new Date().toISOString(),
+    });
+    hasil.tulisUji = { berhasil: true, lamaMs: Date.now() - mulai };
+    tandaiMirrorBerhasil('uji-cadangan');
+  } catch (err: any) {
+    hasil.tulisUji = {
+      berhasil: false,
+      lamaMs: Date.now() - mulai,
+      pesan: ((err && err.message) || String(err)).slice(0, 300),
+    };
+    handleFirestoreQuotaError(err, 'UjiCadangan');
+    hasil.kesimpulan = 'Wadah ini TIDAK BISA menulis ke Firestore. Arsip sengaja tidak didorong supaya keadaan tidak bertambah keruh.';
+    return res.json({ ...hasil, ...keadaanMirror() });
+  }
+
+  // 2. Baru setelah terbukti bisa menulis, dorong isi papan ke arsip.
+  //
+  // Tanggal arsipnya diambil dari registeredAt masing-masing pasien (lihat
+  // tanggalKunjungan), jadi pasien yang tertinggal dari hari sebelumnya masuk ke
+  // tanggal aslinya - bukan ke hari ini.
+  try {
+    const state: any = loadStateFromFile() || {};
+    const pasien = Array.isArray(state.patients) ? state.patients : [];
+    if (pasien.length > 0) {
+      syncPatientsToMasterAndArchive(pasien, Array.isArray(state.boxes) ? state.boxes : undefined);
+    }
+    await flushPendingFirestoreMirrors();
+    hasil.arsipDidorong = { jumlahPasien: pasien.length };
+    hasil.kesimpulan = pasien.length > 0
+      ? `Penulisan berhasil. ${pasien.length} pasien di papan sudah didorong ke arsip dan dicadangkan.`
+      : 'Penulisan berhasil. Papan kosong, jadi tidak ada arsip yang perlu didorong.';
+  } catch (err: any) {
+    hasil.arsipDidorong = { berhasil: false, pesan: ((err && err.message) || String(err)).slice(0, 300) };
+    hasil.kesimpulan = 'Penulisan percobaan berhasil, tetapi pendorongan arsip gagal. Pesannya ada di atas.';
+  }
+
+  res.json({ ...hasil, ...keadaanMirror() });
 });
 
 // GET log audit penghapusan pasien/kotak & reset antrean (dipakai fitur "Restore

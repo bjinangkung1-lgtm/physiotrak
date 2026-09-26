@@ -418,3 +418,43 @@ Status kini juga menampilkan `firestoreSambungUlangTerakhirAt` dan
 
 **Pelajaran:** batas waktu saja belum cukup. Tanpa penyambungan ulang, kita hanya
 berpindah dari diam selamanya menjadi gagal selamanya.
+
+## 26 September 2026 (lanjutan 2) - Hitungan beruntun yang tidak pernah tercapai
+
+**Bug di rancangan sendiri, hanya terlihat di server sungguhan.** Pemicu penyambungan
+ulang semula hanya menghitung kehabisan waktu, dan MENOLKAN hitungan pada kegagalan
+jenis lain. Di sandbox terbukti klien yang tersangkut menghasilkan campuran:
+11 kegagalan "client is offline" (pembacaan, gagal cepat) menyela di antara
+2 kehabisan waktu (penulisan). Setiap kegagalan offline menolkan hitungan, sehingga
+ambang 2 TIDAK PERNAH tercapai - penyambungan ulang tidak akan pernah jalan.
+
+Uji unit sebelumnya justru mengunci harapan yang salah itu sebagai "benar".
+Uji unit saja tidak cukup untuk ini; barulah ketahuan setelah dipanggil dua kali
+lewat HTTP di server yang benar-benar berjalan.
+
+**Perbaikan:** kedua gejala dihitung sebagai penyakit yang sama (kehabisan waktu,
+"client is offline", kode 'unavailable'). Yang menolkan hitungan hanya KEBERHASILAN.
+Kegagalan lain (kuota, izin) tidak menaikkan maupun menolkan. Ditambah
+SAMBUNG_ULANG_JEDA_MS 60 detik supaya sambungan tidak dibongkar-pasang terus-menerus.
+
+**Harness uji juga diperbaiki:** pola pengambilan deklarasi memakai spasi setelah
+nama, padahal deklarasi bertipe ditulis `let nama: string | null = null;`. Pengambilan
+itu diam-diam gagal, dan ujinya sempat lolos HANYA karena penugasan tanpa deklarasi
+membuat variabel global di mode non-ketat. Sekarang memakai \b dan melempar kalau
+deklarasinya tidak ketemu.
+
+## Alamat diagnosa baru: /api/system/uji-cadangan
+
+Status biasa tidak bisa membedakan "sudah sembuh" dari "masih rusak" kalau wadah baru
+dimulai: semuanya nol dan null karena belum ada yang memicu penulisan, dan menunggu
+tidak menolong. Alamat ini memancing satu penulisan sungguhan ke
+`system_state/uji_sambungan` (TIDAK menyentuh data pasien), lalu - hanya kalau
+penulisan itu berhasil - mendorong isi papan ke arsip dan memaksa pencadangan.
+
+Tanggal arsipnya diambil dari registeredAt masing-masing pasien lewat
+tanggalKunjungan(), jadi pasien yang tertinggal dari hari sebelumnya masuk ke tanggal
+aslinya, bukan ke hari ini. Itulah jalan pulang 60 pasien 25 September.
+
+**Keadaan awan per 26 Sep 12.10 WIB (dibaca langsung, hanya-baca):**
+current_queue dicadangkan terakhir 26/9 00.06, berisi 60 pasien semuanya 25 Sep.
+Arsip bulan September ditulis terakhir 24/9 14.02; 25 dan 26 September TIDAK ADA.
